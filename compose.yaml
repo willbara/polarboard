@@ -1,0 +1,19 @@
+services:
+  polarboard:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: polarboard
+    ports:
+      - "8787:8787"
+    volumes:
+      # Everything Polarboard keeps: ./data/vault holds the first account's notes,
+      # ./data/vaults/* the accounts added in the app. :Z relabels for SELinux (Fedora); harmless elsewhere.
+      - ./data:/data:Z
+      # Optional, for git push over SSH: mount a key the container can use.
+      # - ~/.ssh/polarboard_ed25519:/root/.ssh/id_ed25519:ro,Z
+    environment:
+      # Optional server password: required to add or delete accounts. Each account
+      # can also have its own password, set in Settings → General.
+      POLARBOARD_PASSWORD: ""
+    restart: unless-stopped

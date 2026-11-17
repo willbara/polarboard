@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Polarboard</title>
+  <meta name="description" content="Quiet markdown notes on your own server.">
+  <meta name="theme-color" content="#1a1b1e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/static/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="icon" id="favicon" href="/static/icon.svg" type="image/svg+xml">
+  <script src="/static/boot.js"></script>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <div class="app" id="app">
+    <div class="corner">
+      <button class="icon-btn" id="sidebarBtn" title="Toggle sidebar (Ctrl \)" aria-label="Toggle sidebar"><i data-icon="sidebar"></i></button>
+    </div>
+
+    <div class="side" id="side">
+      <nav class="rail" aria-label="Actions">
+        <div class="logo" title="Polarboard"><i data-icon="logo"></i></div>
+        <button class="rail-btn" id="railNew" title="New note (Alt N)" aria-label="New note"><i data-icon="filePlus"></i></button>
+        <button class="rail-btn" id="railSwitch" title="Open a note (Ctrl O)" aria-label="Open a note"><i data-icon="search"></i></button>
+        <button class="rail-btn" id="railDaily" title="Today's note (Alt D)" aria-label="Today's note"><i data-icon="calendar"></i></button>
+        <button class="rail-btn" id="railPalette" title="Commands (Ctrl Shift P)" aria-label="Commands"><i data-icon="command"></i></button>
+        <span class="grow"></span>
+        <button class="vault-btn" id="vaultBtn" title="Account" aria-label="Account"></button>
+        <button class="rail-btn" id="themeBtn" title="Light / dark" aria-label="Toggle theme"><i data-icon="moon"></i></button>
+        <button class="rail-btn" id="settingsBtn" title="Settings" aria-label="Settings"><i data-icon="sliders"></i></button>
+      </nav>
+
+      <div class="side-head" role="tablist" aria-label="Panels">
+        <button class="ptab" data-panel="files" title="Notes" aria-label="Notes"><i data-icon="folder"></i></button>
+        <button class="ptab" data-panel="search" title="Search" aria-label="Search"><i data-icon="search"></i></button>
+        <button class="ptab" data-panel="tags" title="Tags" aria-label="Tags"><i data-icon="hash"></i></button>
+        <button class="ptab" data-panel="outline" title="Outline" aria-label="Outline"><i data-icon="outline"></i></button>
+        <button class="ptab" data-panel="links" title="Backlinks" aria-label="Backlinks"><i data-icon="link"></i></button>
+      </div>
+
+      <aside class="sidebar" id="sidebar">
+        <section class="panel" data-panel="files">
+          <header class="panel-tools">
+            <button class="icon-btn sm" id="newNoteBtn" title="New note (Alt N)"><i data-icon="filePlus"></i></button>
+            <button class="icon-btn sm" id="newFolderBtn" title="New folder"><i data-icon="folderPlus"></i></button>
+            <button class="icon-btn sm" id="sortBtn" title="Sort"><i data-icon="sort"></i></button>
+            <button class="icon-btn sm" id="collapseBtn" title="Collapse all"><i data-icon="collapse"></i></button>
+          </header>
+          <div class="tree scroll" id="tree" role="tree"></div>
+        </section>
+
+        <section class="panel" data-panel="search" hidden>
+          <header class="panel-tools">
+            <label class="search-box">
+              <i data-icon="search"></i>
+              <input id="searchInput" type="search" placeholder="Search notes" autocomplete="off" spellcheck="false">
+            </label>
+          </header>
+          <div class="list scroll" id="searchResults"></div>
+        </section>
+
+        <section class="panel" data-panel="tags" hidden>
+          <header class="panel-tools"><span class="panel-title">Tags</span></header>
+          <div class="tag-cloud" id="tagCloud"></div>
+          <div class="list scroll" id="tagNotes"></div>
+        </section>
+
+        <section class="panel" data-panel="outline" hidden>
+          <header class="panel-tools"><span class="panel-title">Outline</span></header>
+          <div class="list scroll" id="outline"></div>
+        </section>
+
+        <section class="panel" data-panel="links" hidden>
+          <header class="panel-tools"><span class="panel-title">Backlinks</span></header>
+          <div class="list scroll" id="backlinks"></div>
+        </section>
+      </aside>
+    </div>
+    <div class="scrim" id="scrim"></div>
+
+    <div class="tabbar" id="tabbar">
+      <div class="tabs" id="tabs" role="tablist" aria-label="Open notes"></div>
+      <button class="icon-btn sm new-tab" id="newTabBtn" title="New tab (Alt T)" aria-label="New tab"><i data-icon="plus"></i></button>
+      <span class="grow"></span>
+    </div>
+
+    <main class="main" id="main">
+      <header class="navrow">
+        <div class="nav-arrows">
+          <button class="icon-btn sm" id="backBtn" title="Back" aria-label="Back"><i data-icon="arrowLeft"></i></button>
+          <button class="icon-btn sm" id="fwdBtn" title="Forward" aria-label="Forward"><i data-icon="arrowRight"></i></button>
+        </div>
+        <nav class="crumbs" id="crumbs"></nav>
+
+        <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formatting">
+          <button data-cmd="heading" title="Heading"><i data-icon="heading"></i></button>
+          <button data-cmd="bold" title="Bold (Ctrl B)"><i data-icon="bold"></i></button>
+          <button data-cmd="italic" title="Italic (Ctrl I)"><i data-icon="italic"></i></button>
+          <button data-cmd="strike" title="Strikethrough"><i data-icon="strike"></i></button>
+          <span class="sep"></span>
+          <button data-cmd="list" title="Bulleted list"><i data-icon="list"></i></button>
+          <button data-cmd="task" title="Checklist"><i data-icon="task"></i></button>
+          <button data-cmd="quote" title="Quote"><i data-icon="quote"></i></button>
+          <button data-cmd="code" title="Code"><i data-icon="code"></i></button>
+          <span class="sep"></span>
+          <button data-cmd="link" title="Link (Ctrl K)"><i data-icon="link"></i></button>
+          <button data-cmd="image" title="Insert image"><i data-icon="image"></i></button>
+        </div>
+
+        <button class="icon-btn sm edit-preview" id="editPreviewBtn" title="Edit in preview: click a paragraph to edit it" aria-label="Edit in preview"><i data-icon="edit"></i></button>
+        <div class="seg" id="modeSeg" role="tablist" aria-label="View">
+          <button data-mode="write" title="Write"><i data-icon="pen"></i></button>
+          <button data-mode="split" title="Split"><i data-icon="split"></i></button>
+          <button data-mode="read" title="Read (Ctrl E)"><i data-icon="eye"></i></button>
+        </div>
+        <button class="icon-btn sm" id="focusBtn" title="Focus mode (Ctrl Shift F)" aria-label="Focus mode" aria-pressed="false"><i data-icon="focus"></i></button>
+        <button class="icon-btn sm" id="noteMenuBtn" title="Note actions" aria-label="Note actions"><i data-icon="more"></i></button>
+      </header>
+
+      <section class="workspace" id="workspace" data-mode="write">
+        <div class="pane edit-pane scroll" id="editPane">
+          <div class="sheet">
+            <input class="title-input" id="titleInput" placeholder="Untitled" spellcheck="false" autocomplete="off" aria-label="Note title">
+            <div class="note-tags" id="noteTags"></div>
+            <div class="props" id="props" hidden></div>
+            <div class="editor" id="editor">
+              <pre class="hl" id="hl" aria-hidden="true"></pre>
+              <pre class="lints" id="lints" aria-hidden="true"></pre>
+              <textarea id="ta" placeholder="Start writing…" aria-label="Note body"></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="pane preview-pane scroll" id="previewPane">
+          <div class="sheet">
+            <h1 class="title-view" id="titleView"></h1>
+            <div class="note-tags" id="noteTagsView"></div>
+            <div class="props" id="propsView" hidden></div>
+            <article class="md" id="preview"></article>
+          </div>
+        </div>
+        <div class="empty" id="empty">
+          <div class="empty-card">
+            <div class="empty-logo"><i data-icon="logo"></i></div>
+            <h1>Polarboard</h1>
+            <p>Quiet notes, kept on your own server.</p>
+            <button class="btn primary" id="emptyNew"><i data-icon="plus"></i>New note <kbd>Alt N</kbd></button>
+            <div class="recent" id="recent"></div>
+            <div class="hints">
+              <span><kbd>Ctrl P</kbd> search</span>
+              <span><kbd>Ctrl E</kbd> read / write</span>
+              <span>Right-click a note for more</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="statusbar" id="status">
+        <button class="st sync" id="stSync" data-state="synced" title="Sync status"><i class="dot"></i><span>Synced</span></button>
+        <button class="st lint-st" id="stLint" hidden title="Writing checks"><i class="lint-dot"></i><span></span></button>
+        <span class="st" id="stWords"></span>
+        <span class="st hide-sm" id="stChars"></span>
+        <span class="st hide-sm" id="stRead"></span>
+        <span class="grow"></span>
+        <button class="st" id="stWidth" title="Margins"><i data-icon="width"></i><span></span></button>
+        <span class="st hide-sm" id="stCreated"></span>
+        <span class="st" id="stModified"></span>
+      </footer>
+    </main>
+  </div>
+
+  <div class="landing" id="landing" hidden>
+    <div class="landing-inner">
+      <div class="login-logo"><i data-icon="logo"></i></div>
+      <h1>Polarboard</h1>
+      <p id="landingSub">Choose an account</p>
+      <div class="account-grid" id="accountGrid"></div>
+      <form class="landing-form" id="unlockForm" hidden autocomplete="on">
+        <div class="landing-who" id="unlockWho"></div>
+        <input class="field" type="text" name="username" id="unlockUser" autocomplete="username" hidden>
+        <input class="field" id="unlockPass" type="password" placeholder="Password" autocomplete="current-password" required>
+        <label class="check"><input type="checkbox" id="unlockRemember" checked> Keep it unlocked on this device</label>
+        <div class="login-error" id="unlockError"></div>
+        <button class="btn primary" type="submit">Open</button>
+        <button class="btn ghost" type="button" data-back>Back</button>
+      </form>
+      <form class="landing-form" id="createForm" hidden autocomplete="off">
+        <input class="field" id="createName" placeholder="Account name" maxlength="40" required>
+        <input class="field" id="createPass" type="password" placeholder="Password (optional)" autocomplete="new-password">
+        <input class="field" id="createServer" type="password" placeholder="Server password" hidden>
+        <p class="landing-note">Each account is its own set of notes. Without a password, anyone who can reach this server can open it.</p>
+        <div class="login-error" id="createError"></div>
+        <button class="btn primary" type="submit">Create account</button>
+        <button class="btn ghost" type="button" data-back>Back</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="drop-hint" id="dropHint"><div><i data-icon="image"></i>Drop to insert image</div></div>
+  <div id="layer"></div>
+  <input type="file" id="fileInput" accept="image/*" multiple hidden>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
