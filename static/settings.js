@@ -109,7 +109,7 @@ const PAGES = {
     const me = list.find((a) => a.id === ctx.VAULT) || ctx.currentAccount();
     const ic = me.icon || {};
     const up = info ? Math.max(1, Math.round((Date.now() - info.started) / 3600000)) : 0;
-    const glyphs = ['snowflake', 'mountain', 'moon', 'leaf', 'book', 'star', 'flame', 'coffee', 'feather', 'compass', 'wave', 'home', 'heart', 'code'];
+    const glyphs = ['feather', 'snowflake', 'mountain', 'moon', 'leaf', 'book', 'star', 'flame', 'coffee', 'compass', 'wave', 'home', 'heart', 'code'];
     const hues = [212, 190, 160, 95, 45, 25, 350, 300, 265, 0];
     const stats = info ? `<div class="stats">
       <div class="stat"><b>${info.notes.toLocaleString()}</b><small>notes</small></div>
@@ -139,7 +139,7 @@ const PAGES = {
         </div>
         <div class="pref stack"><div class="pref-label"><span>Picture</span><small>Pick a symbol and a color, or upload your own picture.</small></div>
           <div class="pref-ctl">
-            <div class="glyph-grid">${glyphs.map((g) => `<button class="glyph${ic.type !== 'image' && (ic.name || 'snowflake') === g ? ' active' : ''}" data-glyph="${g}" title="${g}" style="--ah:${ic.hue ?? 212}">${icon(g === 'snowflake' ? 'logo' : g)}</button>`).join('')}</div>
+            <div class="glyph-grid">${glyphs.map((g) => `<button class="glyph${ic.type !== 'image' && (ic.name || 'feather') === g ? ' active' : ''}" data-glyph="${g}" title="${g}" style="--ah:${ic.hue ?? 212}">${icon(g === 'snowflake' ? 'logo' : g)}</button>`).join('')}</div>
             <div class="swatches" style="margin-top:10px">${hues.map((h) => `<button class="swatch${ic.type !== 'image' && (ic.hue ?? 212) === h ? ' active' : ''}" style="--h:${h};--s:55%" data-ahue="${h}" title="Color"></button>`).join('')}</div>
             <div style="display:flex;gap:8px;margin-top:12px">${btn('upload-picture', 'Upload picture…', 'outline')}${ic.type === 'image' ? btn('remove-picture', 'Use a symbol instead', 'ghost') : ''}</div>
           </div></div>
@@ -175,7 +175,7 @@ const PAGES = {
       try {
         if (g) {
           const ic = me().icon || {};
-          const next = { type: 'glyph', name: g.dataset.glyph || (ic.type === 'image' ? 'snowflake' : ic.name || 'snowflake'), hue: g.dataset.ahue ? +g.dataset.ahue : ic.hue ?? 212 };
+          const next = { type: 'glyph', name: g.dataset.glyph || (ic.type === 'image' ? 'feather' : ic.name || 'feather'), hue: g.dataset.ahue ? +g.dataset.ahue : ic.hue ?? 212 };
           await ctx.api('POST', '/api/account', { icon: next });
           return refresh();
         }
@@ -194,7 +194,7 @@ const PAGES = {
           };
           input.click();
         }
-        if (act === 'remove-picture') { await ctx.api('POST', '/api/account', { icon: { type: 'glyph', name: 'snowflake', hue: me().icon?.hue ?? 212 } }); return refresh(); }
+        if (act === 'remove-picture') { await ctx.api('POST', '/api/account', { icon: { type: 'glyph', name: 'feather', hue: me().icon?.hue ?? 212 } }); return refresh(); }
         if (act === 'set-password' || act === 'change-password') {
           if (val('password') !== val('confirm')) return ctx.toast('The passwords do not match', 'err');
           await ctx.api('POST', '/api/account/password', { current: val('current'), password: val('password') });

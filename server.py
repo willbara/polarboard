@@ -33,7 +33,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 STARTED = time.time()
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -663,16 +663,23 @@ def git_loop():
 # An account *is* a vault: a named set of notes with an icon and an optional
 # password. With no password, anyone who can reach the server can open it.
 
-GLYPHS = ["snowflake", "mountain", "moon", "leaf", "book", "star", "flame", "coffee", "feather", "compass", "wave", "home", "heart", "code"]
+GLYPHS = ["feather", "snowflake", "mountain", "moon", "leaf", "book", "star", "flame", "coffee", "compass", "wave", "home", "heart", "code"]
 ICON_DIR = SERVER_DIR / "icons"
 ICON_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "image/gif": ".gif"}
 
 
 def default_icon(aid):
+    """Every account starts as a feather; the color differs per account."""
+    return {"type": "glyph", "name": "feather", "hue": 212 if aid == "main" else int(sha(aid)[:8], 16) % 360}
+
+
+def old_default_icon(aid):
+    """What 0.5 and 0.6 assigned, so untouched defaults can move to the feather."""
     if aid == "main":
         return {"type": "glyph", "name": "snowflake", "hue": 212}
+    old = ["snowflake", "mountain", "moon", "leaf", "book", "star", "flame", "coffee", "feather", "compass", "wave", "home", "heart", "code"]
     n = int(sha(aid)[:8], 16)
-    return {"type": "glyph", "name": GLYPHS[n % len(GLYPHS)], "hue": n % 360}
+    return {"type": "glyph", "name": old[n % len(old)], "hue": n % 360}
 
 
 def clean_icon(icon):
@@ -708,6 +715,8 @@ def load_registry():
         main["name"] = "polarboard"
     REGISTRY = {"accounts": accounts}
     for aid, a in accounts.items():
+        if a.get("icon") == old_default_icon(aid):  # never picked by hand, so follow the new default
+            a["icon"] = default_icon(aid)
         a.setdefault("icon", default_icon(aid))
         a.setdefault("created", now_ms())
         VAULTS[aid] = Vault(aid, a["name"], account_dir(a))
