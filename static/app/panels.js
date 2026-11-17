@@ -1,6 +1,6 @@
 import { esc, slug } from '../markdown.js';
 import { icon } from '../icons.js';
-import { $, $$, SORTS, api, copyText, debounce, dirname, el, enc, mobile, relTime, state, stem, store, vstore } from './core.js';
+import { $, $$, SORTS, api, copyText, debounce, dirname, el, enc, mobile, noteByPath, relTime, state, stem, store, vstore } from './core.js';
 import { insertTemplate, openDaily } from './daily.js';
 import { setFocus } from './layout.js';
 import { deleteNote, download, duplicateNote, exportDialog, moveNoteDialog, newFolder, newNote, openHistory, shareDialog, tagsDialog } from './notes.js';
@@ -8,10 +8,10 @@ import { resolvedTheme, setSetting } from './prefs.js';
 import { showSettings } from './shell.js';
 import { selectRange } from './spellui.js';
 import { newTab, openNote } from './tabs.js';
-import { byName, renderTree } from './tree.js';
+import { byName, noteMenu, renderTree, toggleStar } from './tree.js';
 import { commandPalette, menu, quickSwitcher } from './ui.js';
 import { addProperties, block } from './writing.js';
-import { edit } from './commands.js';
+import { comboLabel, edit, keyFor } from './commands.js';
 
 // ------------------------------------------------------------------ panels
 export function showPanel(name, reveal = false) {
@@ -24,6 +24,7 @@ export function showPanel(name, reveal = false) {
   if (mobile.matches && reveal) openDrawer();
   if (name === 'search') { renderSearch(); setTimeout(() => $('#searchInput').focus(), 30); }
   if (name === 'tags') renderTags();
+  if (name === 'starred') renderStarred();
   if (name === 'outline') renderOutline();
   if (name === 'links') renderBacklinks();
 }
@@ -44,6 +45,31 @@ export function openDrawer() { el.app.classList.add('drawer-open'); }
 export function closeDrawer() { el.app.classList.remove('drawer-open'); }
 $('#sidebarBtn').addEventListener('click', () => toggleSidebar());
 $('#scrim').addEventListener('click', closeDrawer);
+
+// starred
+export function renderStarred() {
+  if (state.panel !== 'starred') return;
+  const list = state.tree.notes.filter((n) => n.starred).sort((a, b) => b.starred - a.starred);
+  $('#starredList').innerHTML = list.length
+    ? list.map((n) => `<div class="hit star-row${state.cur?.path === n.path ? ' active' : ''}" data-open="${esc(n.path)}" tabindex="0" role="button">
+        <b>${esc(stem(n.path))}<span>${esc(dirname(n.path))}</span></b>
+        <button class="icon-btn sm unstar" data-unstar="${esc(n.path)}" title="Remove from starred" aria-label="Remove ${esc(stem(n.path))} from starred">${icon('x')}</button></div>`).join('')
+    : `<div class="tree-empty">Star notes you come back to often. Right-click a note, or press ${esc(comboLabel(keyFor('star')) || 'Alt S')}.</div>`;
+}
+$('#starredList').addEventListener('click', (e) => {
+  const un = e.target.closest('[data-unstar]');
+  if (un) { e.stopPropagation(); toggleStar(un.dataset.unstar); return; }
+  const row = e.target.closest('[data-open]');
+  if (row) openNote(row.dataset.open, { newTab: e.ctrlKey || e.metaKey });
+});
+$('#starredList').addEventListener('keydown', (e) => {
+  const row = e.target.closest('[data-open]');
+  if (row && e.target === row && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openNote(row.dataset.open); }
+});
+$('#starredList').addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('[data-open]');
+  if (row) { e.preventDefault(); noteMenu(row.dataset.open, { x: e.clientX, y: e.clientY }); }
+});
 
 // search
 export let searchSeq = 0;
@@ -128,6 +154,7 @@ $('#noteMenuBtn').addEventListener('click', (e) => {
     { icon: 'move', label: 'Move to…', run: () => moveNoteDialog(cur.path) },
     { icon: 'copy', label: 'Duplicate', run: () => duplicateNote(cur.path) },
     { icon: 'tag', label: 'Tags…', run: () => tagsDialog(cur.path) },
+    { icon: 'star', label: noteByPath(cur.path)?.starred ? 'Unstar' : 'Star', run: () => toggleStar(cur.path) },
     { icon: 'history', label: 'Version history', run: () => openHistory(cur.path) },
     { icon: 'share', label: 'Share link…', run: () => shareDialog(cur.path) },
     { icon: 'template', label: 'Insert template…', run: () => insertTemplate() },

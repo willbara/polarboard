@@ -7,6 +7,7 @@ import { closeDrawer, renderTags, showPanel } from './panels.js';
 import { newTab, openNote } from './tabs.js';
 import { moveItem } from './tree.js';
 import { block, commitBlock, editBlock, onInput, previewEditable, renderPreview } from './writing.js';
+import { find, refreshFind } from './find.js';
 
 // ------------------------------------------------------------------ focus mode
 // Hides everything but the page. Pointing at the top or bottom edge brings
@@ -123,7 +124,8 @@ export function setMode(mode, remember = true) {
   $('#editPreviewBtn').classList.toggle('on', !!state.settings.previewEdit);
   if (remember) { state.settings.mode = mode; store.set('settings', state.settings); }
   renderPreview(true);
-  if (mode !== 'read' && state.cur && !el.layer.firstChild) requestAnimationFrame(() => el.ta.focus({ preventScroll: true }));
+  if (find.open) refreshFind();
+  if (mode !== 'read' && state.cur && !el.layer.firstChild && !find.open) requestAnimationFrame(() => el.ta.focus({ preventScroll: true }));
 }
 $('#modeSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
 mobile.addEventListener('change', () => { closeDrawer(); setMode(state.settings.mode, false); });

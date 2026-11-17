@@ -6,6 +6,7 @@ import { $, $$, api, el, state, vstore } from './core.js';
 import { setMode } from './layout.js';
 import { menu, toast } from './ui.js';
 import { edit } from './commands.js';
+import { block } from './writing.js';
 
 // ------------------------------------------------------------------ writing checks (Harper)
 export const spell = new Spell();
@@ -56,16 +57,18 @@ export async function runLint() {
   setLintStatus();
 }
 
-export function renderLints() {
-  const text = el.ta.value;
+export function renderLints() { paintLints(el.lints, el.ta.value, lint.items); }
+
+/** Draw underlines: a copy of the text, invisible except for the wavy lines under each issue. */
+export function paintLints(layer, text, items) {
   let html = '';
   let pos = 0;
-  lint.items.forEach((l, i) => {
+  items.forEach((l, i) => {
     if (l.start < pos || l.end > text.length) return;
     html += esc(text.slice(pos, l.start)) + `<span class="lint g-${l.group}" data-i="${i}">${esc(text.slice(l.start, l.end))}</span>`;
     pos = l.end;
   });
-  el.lints.innerHTML = html + esc(text.slice(pos)) + '​';
+  layer.innerHTML = html + esc(text.slice(pos)) + '\u200b';
 }
 
 export function clearLints() { lint.items = []; el.lints.innerHTML = ''; }
@@ -76,6 +79,11 @@ export function shiftLints(next) {
   const prev = prevText;
   prevText = next;
   if (!lint.items.length || prev === next) return;
+  lint.items = shiftItems(prev, next, lint.items);
+  renderLints();
+}
+
+export function shiftItems(prev, next, items) {
   const max = Math.min(prev.length, next.length);
   let a = 0;
   while (a < max && prev[a] === next[a]) a++;
@@ -83,10 +91,62 @@ export function shiftLints(next) {
   while (b < max - a && prev[prev.length - 1 - b] === next[next.length - 1 - b]) b++;
   const oldEnd = prev.length - b;
   const delta = next.length - prev.length;
-  lint.items = lint.items
+  return items
     .filter((l) => l.end < a || l.start > oldEnd)
     .map((l) => (l.start > oldEnd ? { ...l, start: l.start + delta, end: l.end + delta } : l));
-  renderLints();
+}
+
+/** The main editor as a lint target; the block editor in the preview makes its own (blockLints). */
+export const mainLints = {
+  get ta() { return el.ta; },
+  get items() { return lint.items; },
+  set items(v) { lint.items = v; },
+  render() { renderLints(); setLintStatus(); },
+  recheck(ms = 150) { scheduleLint(ms); },
+};
+
+/** Writing checks for the block editor in the preview: same underlines and menu, its own text. */
+export function blockLints(ta, layer) {
+  const t = {
+    ta, items: [], timer: 0,
+    render() { paintLints(layer, ta.value, t.items); },
+    recheck(ms = 450) {
+      clearTimeout(t.timer);
+      if (!spellOn() || !lint.ready) return;
+      t.timer = setTimeout(async () => {
+        const text = ta.value;
+        let items;
+        try { items = await spell.check(text, state.settings.spellGroups, 'block'); } catch { return; }
+        if (!items || ta.value !== text || !ta.isConnected) return;
+        t.items = items;
+        t.render();
+      }, ms);
+    },
+  };
+  let prev = ta.value;
+  ta.addEventListener('input', () => {
+    if (t.items.length) t.items = shiftItems(prev, ta.value, t.items);
+    prev = ta.value;
+    t.render();
+    t.recheck();
+  });
+  ta.addEventListener('contextmenu', (e) => {
+    const l = lintAt(layer, t.items, e);
+    if (!l) return;
+    e.preventDefault();
+    lintMenu(l, { x: e.clientX, y: e.clientY }, t);
+  });
+  t.render();
+  t.recheck(0);
+  return t;
+}
+
+/** The issue under the pointer, if any. */
+export function lintAt(layer, items, e) {
+  if (!items.length) return null;
+  const hit = $$('.lint', layer).find((span) => [...span.getClientRects()].some((r) =>
+    e.clientX >= r.left - 1 && e.clientX <= r.right + 1 && e.clientY >= r.top - 2 && e.clientY <= r.bottom + 2));
+  return hit ? items[+hit.dataset.i] : null;
 }
 
 export function setLintStatus(mode) {
@@ -101,12 +161,14 @@ export function setLintStatus(mode) {
   b.title = mode === 'error' ? `Harper could not start: ${lint.error}` : 'Writing checks by Harper. Click to list them.';
 }
 
-export function applySuggestion(l, s) {
-  if (el.ta.value.slice(l.start, l.end) !== l.problem) return scheduleLint(0);
-  if (s.kind === 1) replace(el.ta, l.start, l.end, '');
-  else if (s.kind === 2) replace(el.ta, l.end, l.end, s.text);
-  else replace(el.ta, l.start, l.end, s.text, l.start + s.text.length);
-  scheduleLint(150);
+export function applySuggestion(l, s, t = mainLints) {
+  const ta = t.ta;
+  if (ta.value.slice(l.start, l.end) !== l.problem) return t.recheck(0);
+  if (s.kind === 1) replace(ta, l.start, l.end, '');
+  else if (s.kind === 2) replace(ta, l.end, l.end, s.text);
+  else replace(ta, l.start, l.end, s.text, l.start + s.text.length);
+  if (t !== mainLints) ta.focus({ preventScroll: true });
+  t.recheck(150);
 }
 
 export async function addWord(word) {
@@ -117,34 +179,34 @@ export async function addWord(word) {
     vstore.set('words', [...new Set([...vstore.get('words', []), word])]);
   }
   await spell.addWords([word]);
-  lint.items = lint.items.filter((x) => !(x.group === 'spelling' && x.problem.toLowerCase() === word.toLowerCase()));
+  const same = (x) => x.group === 'spelling' && x.problem.toLowerCase() === word.toLowerCase();
+  lint.items = lint.items.filter((x) => !same(x));
   renderLints();
   setLintStatus();
+  if (block.lints) { block.lints.items = block.lints.items.filter((x) => !same(x)); block.lints.render(); }
   toast(`Added “${word}” to the dictionary`);
 }
 
-export function lintMenu(l, anchor) {
+export function lintMenu(l, anchor, t = mainLints) {
   const sugs = l.suggestions.map((s) => ({
     icon: 'check',
     label: s.kind === 1 ? 'Remove it' : s.kind === 2 ? `Add “${s.text}”` : s.text ? `Change to “${s.text}”` : 'Remove it',
-    run: () => applySuggestion(l, s),
+    run: () => applySuggestion(l, s, t),
   }));
   menu(anchor, [
     { message: l.message, kind: l.group },
     ...sugs,
     ...(sugs.length ? ['-'] : []),
     ...(l.group === 'spelling' ? [{ icon: 'plus', label: `Add “${l.problem}” to dictionary`, run: () => addWord(l.problem) }] : []),
-    { icon: 'x', label: 'Ignore', run: async () => { await spell.ignore(el.ta.value, l); lint.items = lint.items.filter((x) => x !== l); renderLints(); setLintStatus(); } },
+    { icon: 'x', label: 'Ignore', run: async () => { await spell.ignore(t.ta.value, l); t.items = t.items.filter((x) => x !== l); t.render(); } },
   ]);
 }
 
 el.ta.addEventListener('contextmenu', (e) => {
-  if (!lint.items.length) return;
-  const hit = $$('.lint', el.lints).find((span) => [...span.getClientRects()].some((r) =>
-    e.clientX >= r.left - 1 && e.clientX <= r.right + 1 && e.clientY >= r.top - 2 && e.clientY <= r.bottom + 2));
-  if (!hit) return; // the browser's own menu
+  const l = lintAt(el.lints, lint.items, e);
+  if (!l) return; // the browser's own menu
   e.preventDefault();
-  lintMenu(lint.items[+hit.dataset.i], { x: e.clientX, y: e.clientY });
+  lintMenu(l, { x: e.clientX, y: e.clientY });
 });
 
 export function selectRange(start, end) {

@@ -8,19 +8,20 @@ import { formatDate, templateNotes } from './daily.js';
 import { setFocus, setMode } from './layout.js';
 import { importFiles, openHistory, saveFile } from './notes.js';
 import { renderSearch } from './panels.js';
-import { applySettings, setConfig, setSetting } from './prefs.js';
+import { applySettings, cfgSaved, setConfig, setSetting } from './prefs.js';
 import { spell, startSpell } from './spellui.js';
 import { connectLive, flushPending, live, manual, pending, save, setSync, syncNow } from './sync.js';
 import { loadNote, openNote, pathFromHash, renderTabs, showEmpty } from './tabs.js';
 import { refreshTree, renderTree } from './tree.js';
 import { closeLayer, dialog, toast } from './ui.js';
 import { replace } from '../editor.js';
+import { restoreSide } from './side.js';
 
 // ------------------------------------------------------------------ settings window
 export function showSettings(category) {
   openSettings({
     state, DEFAULTS, ACCENTS, WIDTHS, SORTS, COMMANDS,
-    setSetting, setConfig, applySettings, api, toast, dialog, closeLayer, pending,
+    setSetting, setConfig, configSaved: () => cfgSaved, applySettings, api, toast, dialog, closeLayer, pending,
     keyFor, comboLabel, comboFromEvent, fmtBytes, fmtDateTime, relTime, saveFile,
     refreshTree, flushPending, openHistory: (p) => openHistory(p),
     stem, dirname, isMac, idb, VAULT, syncNow, spell, startSpell, GROUPS, formatDate, templateNotes,
@@ -34,7 +35,7 @@ export function showSettings(category) {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') {
     if (state.cur?.dirty) { pending.put(state.cur.path, state.cur.content, state.cur.version); if (!manual()) save(); }
-  } else refreshTree();
+  } else refreshTree({ poll: true });
 });
 window.addEventListener('pagehide', () => { if (state.cur?.dirty) pending.put(state.cur.path, state.cur.content, state.cur.version); });
 window.addEventListener('online', () => { if (!manual()) flushPending(); });
@@ -54,13 +55,20 @@ export function schedulePoll(force = false) {
   if (key === pollKey && !force) return;
   pollKey = key;
   clearInterval(pollTimer);
-  if (every) pollTimer = setInterval(() => { if (document.visibilityState === 'visible') refreshTree(); }, every);
+  if (every) pollTimer = setInterval(() => { if (document.visibilityState === 'visible') refreshTree({ poll: true }); }, every);
   connectLive();
 }
 
 Object.assign(hooks, { toast, showLanding, flushPending });
 
+/** Icon-only buttons are named after their tooltip for screen readers. */
+export function labelIconButtons(root = document) {
+  for (const b of root.querySelectorAll('button[title]:not([aria-label])')) if (!b.textContent.trim()) b.setAttribute('aria-label', b.title.replace(/\s*\(.*\)$/, ''));
+}
+$('#skipLink').addEventListener('click', (e) => { e.preventDefault(); if (state.cur) { if (el.ws.dataset.mode === 'read') el.previewPane.focus(); else el.ta.focus(); } });
+
 export async function boot() {
+  labelIconButtons();
   if (!(await chooseAccount())) return;
   applySettings();
   if (store.get('collapsed', false)) el.app.classList.add('sb-collapsed');
@@ -75,6 +83,7 @@ export async function boot() {
   renderTabs();
   api('GET', '/api/config').then((c) => { state.config = c; }).catch(() => {});
   await refreshTree();
+  restoreSide();
   if (state.panel === 'search') renderSearch();
 
   // Restore tabs, dropping any whose note no longer exists.

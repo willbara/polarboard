@@ -19,7 +19,7 @@ export const DEFAULTS = {
   // editor
   font: 'sans', customFont: '', fontSize: 17, lineHeight: 1.72, width: 'medium',
   syntaxColors: true, spellcheck: true, smartLists: true, autoPair: false, typewriter: false, indent: 'tab',
-  linkSuggest: true, tagSuggest: true, slashMenu: true, tableKeys: true, previewEdit: true,
+  linkSuggest: true, tagSuggest: true, slashMenu: true, tableKeys: true, previewEdit: true, hoverPreview: true,
   // writing checks (Harper)
   spellEngine: 'harper', dialect: 'American',
   spellGroups: { spelling: true, grammar: true, punctuation: true, style: true }, harperRules: {},
@@ -91,7 +91,7 @@ export const state = {
 }
 
 export const el = {
-  app: $('#app'), main: $('#main'), ws: $('#workspace'), ta: $('#ta'), hl: $('#hl'), lints: $('#lints'), editor: $('#editor'),
+  app: $('#app'), main: $('#main'), ws: $('#workspace'), ta: $('#ta'), hl: $('#hl'), lints: $('#lints'), finds: $('#finds'), editor: $('#editor'),
   title: $('#titleInput'), titleView: $('#titleView'), preview: $('#preview'),
   editPane: $('#editPane'), previewPane: $('#previewPane'), tree: $('#tree'),
   crumbs: $('#crumbs'), layer: $('#layer'),
@@ -141,8 +141,13 @@ export function copyText(text, msg = 'Copied') {
   else hooks.toast('Clipboard needs HTTPS or localhost', 'err');
 }
 
-export async function api(method, url, body) {
+/**
+ * Call the server. With opts.etag, a response the client already has comes back as
+ * { notModified: true } instead of the whole body (the server answers 304).
+ */
+export async function api(method, url, body, opts = {}) {
   const opt = { method, headers: { 'X-Vault': state.vault, 'X-Polarboard': '1', 'X-Client': CLIENT } };
+  if (opts.etag) { opt.headers['If-None-Match'] = opts.etag; opt.cache = 'no-store'; }
   if (body !== undefined) {
     if (body instanceof Blob) { opt.body = body; opt.headers['Content-Type'] = body.type || 'application/octet-stream'; }
     else { opt.body = JSON.stringify(body); opt.headers['Content-Type'] = 'application/json'; }
@@ -152,6 +157,8 @@ export async function api(method, url, body) {
     setOnline(false);
     const err = new Error('You appear to be offline'); err.offline = true; throw err;
   }
+  if (res.status === 304) { setOnline(true); return { notModified: true, etag: opts.etag }; }
+  if (opts.etag !== undefined) opts.etagOut = res.headers.get('ETag');
   const data = await res.json().catch(() => ({}));
   if (res.status === 401 && data.login) { hooks.showLanding({ account: data.account }); }
   else setOnline(res.status < 500 || res.status === 501);

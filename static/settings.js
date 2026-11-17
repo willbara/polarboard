@@ -329,7 +329,8 @@ const PAGES = {
         row('Edit in preview', 'In Read mode, click a paragraph, list or table to edit its markdown right there. The pencil button beside the view switch turns this on and off.', toggle(s, 'previewEdit'))
         + row('Highlight code', 'Colors code blocks that name their language, like ```js.', toggle(s, 'richCode'))
         + row('Math', 'Renders $inline$ and $$block$$ math with KaTeX.', toggle(s, 'richMath'))
-        + row('Diagrams', 'Renders ```mermaid blocks as diagrams.', toggle(s, 'richDiagrams')));
+        + row('Diagrams', 'Renders ```mermaid blocks as diagrams.', toggle(s, 'richDiagrams'))
+        + row('Preview links on hover', 'Rest the mouse on a [[link]] to read that note without opening it.', toggle(s, 'hoverPreview')));
   },
   mountEditor(body, ctx, rerender) {
     let rules = null;
@@ -590,12 +591,14 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
 
   async sync(ctx) {
     const s = ctx.state.settings;
-    const [info, trash, config, git, cached] = await Promise.all([
+    await ctx.configSaved();
+    const [info, trash, config, git, cached, backups] = await Promise.all([
       ctx.api('GET', '/api/info').catch(() => null),
       ctx.api('GET', '/api/trash').catch(() => ({ items: [] })),
       ctx.api('GET', '/api/config').catch(() => ctx.state.config),
       ctx.api('GET', '/api/git').catch(() => null),
       ctx.idb.keys(`${ctx.VAULT}|note|`),
+      ctx.api('GET', '/api/backups').catch(() => null),
     ]);
     ctx.state.config = config;
     const c = config;
@@ -649,7 +652,8 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
         + trashList + (trash.items.length ? btn('empty-trash', 'Empty trash', 'danger-outline') : ''))
       + group('Backup',
         row('Download a backup', 'A .zip of this vault: every note, folder, attachment and Polarboard’s metadata. Tokens are left out.',
-          `<a class="btn sm outline" href="/api/export?vault=${ve}" download>Download .zip</a><a class="btn sm ghost" href="/api/export?vault=${ve}&history=1" download>With history</a>`));
+          `<a class="btn sm outline" href="/api/export?vault=${ve}" download>Download .zip</a><a class="btn sm ghost" href="/api/export?vault=${ve}&history=1" download>With history</a>`)
+        + backupBody(c, backups, ctx, ve));
   },
   mountSync(body, ctx, rerender) {
     body.addEventListener('click', async (e) => {
@@ -675,6 +679,10 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
         if (act === 'purge' && await confirm('Delete this for good?', 'It cannot be restored afterwards.', 'Delete')) {
           await ctx.api('DELETE', `/api/trash?id=${encodeURIComponent(b.dataset.id)}`); rerender();
         }
+        if (act === 'run-backup') { b.disabled = true; await ctx.api('POST', '/api/backups/run'); ctx.toast('Backup saved'); rerender(); }
+        if (act === 'delete-backup' && await confirm('Delete this backup?', 'The .zip is removed from the server.', 'Delete')) {
+          await ctx.api('DELETE', `/api/backups?name=${encodeURIComponent(b.dataset.name)}`); rerender();
+        }
         if (act === 'empty-trash' && await confirm('Empty the trash?', 'Everything in it is deleted for good.', 'Empty trash')) {
           await ctx.api('DELETE', '/api/trash'); rerender();
         }
@@ -682,6 +690,29 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
     });
   },
 };
+
+const HOURS = Array.from({ length: 24 }, (_, h) => [h, new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })]);
+const DAYS = [[0, 'Monday'], [1, 'Tuesday'], [2, 'Wednesday'], [3, 'Thursday'], [4, 'Friday'], [5, 'Saturday'], [6, 'Sunday']];
+
+/** Scheduled backups: zips written on the server, in a folder the server owner picks. */
+function backupBody(c, data, ctx, ve) {
+  if (!data) return '<div class="item-empty">Scheduled backups are unavailable while offline.</div>';
+  const b = c.backup || {};
+  const when = (ms) => new Date(ms).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  const list = data.backups.length
+    ? `<div class="items">${data.backups.map((x) => `<div class="item">${icon('download')}<div class="grow"><b>${esc(when(x.time))}</b><small>${ctx.relTime(x.time)} · ${ctx.fmtBytes(x.size)}</small></div>
+        <a class="btn sm outline" href="/api/backups/file?vault=${ve}&name=${encodeURIComponent(x.name)}" download>Download</a>${btn('delete-backup', 'Delete', 'ghost', `data-name="${esc(x.name)}"`)}</div>`).join('')}</div>`
+    : '<div class="items"><div class="item-empty">No backups yet.</div></div>';
+  return row('Back up on a schedule', 'Off by default. Each backup is a .zip saved on the server; the oldest are removed once there are more than you keep.', toggle(c, 'backup.enabled', 'c'))
+    + (b.enabled ? row('How often', data.next ? `Next backup ${data.next - Date.now() < 90_000 ? 'within a minute' : when(data.next)}` : '', seg(c, 'backup.every', [['hourly', 'Hourly'], ['daily', 'Daily'], ['weekly', 'Weekly']], 'c'))
+      + (b.every === 'weekly' ? row('On', '', select(c, 'backup.day', DAYS, 'c')) : '')
+      + (b.every !== 'hourly' ? row('At', 'Server time.', select(c, 'backup.hour', HOURS, 'c')) : '')
+      + row('Backups to keep', '', select(c, 'backup.keep', [[3, '3'], [7, '7'], [14, '14'], [30, '30'], [90, '90']], 'c'))
+      + row('Include version history', 'Makes each backup bigger.', toggle(c, 'backup.history', 'c')) : '')
+    + row('Saved in', 'Set by whoever runs the server (POLARBOARD_BACKUPS). Point it at a NAS or a second disk so a backup survives the server’s disk failing.', `<span class="mono">${esc(data.folder)}</span>`)
+    + list
+    + `<div style="display:flex;gap:8px">${btn('run-backup', 'Back up now', 'outline')}</div>`;
+}
 
 function agentName(ua = '') {
   const browser = /Firefox\//.test(ua) ? 'Firefox' : /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : /curl/i.test(ua) ? 'curl' : 'Browser';

@@ -1,6 +1,7 @@
 import { render, esc } from '../markdown.js';
 import { icon } from '../icons.js';
 import { enhance } from '../rich.js';
+import { diffHtml } from '../diff.js';
 import { printNote, htmlFile, EXPORT_DEFAULTS } from '../export.js';
 import { edit } from './commands.js';
 import { $, $$, api, basename, cleanName, copyText, dirname, el, enc, fmtBytes, fmtDate, fmtDateTime, folderMeta, join, noteByPath, pad, relTime, state, stem, store } from './core.js';
@@ -256,6 +257,8 @@ export function findNote(name) {
 }
 
 // ------------------------------------------------------------------ version history
+export let histView = store.get('histView', 'preview');
+export let histAgainst = store.get('histAgainst', 'current');
 export async function openHistory(path = state.cur?.path) {
   if (!path) return;
   if (state.cur?.path === path) await flushSave();
@@ -268,6 +271,14 @@ export async function openHistory(path = state.cur?.path) {
   box.innerHTML = `
     <header class="history-head">
       <h3>${icon('history')} History · ${esc(stem(path))}</h3>
+      <div class="opts history-mode" role="group" aria-label="Show">
+        <button data-view="preview" class="${histView === 'preview' ? 'active' : ''}" aria-pressed="${histView === 'preview'}">Preview</button>
+        <button data-view="changes" class="${histView === 'changes' ? 'active' : ''}" aria-pressed="${histView === 'changes'}">Changes</button>
+      </div>
+      <select class="sel history-against" aria-label="Compare with"${histView === 'changes' ? '' : ' hidden'}>
+        <option value="current"${histAgainst === 'current' ? ' selected' : ''}>Since this version</option>
+        <option value="previous"${histAgainst === 'previous' ? ' selected' : ''}>Made in this version</option>
+      </select>
       <button class="btn sm" data-act="copy" disabled>Copy text</button>
       <button class="btn sm primary" data-act="restore" disabled>Restore this version</button>
       <button class="icon-btn sm" data-act="close" title="Close">${icon('x')}</button>
@@ -280,20 +291,59 @@ export async function openHistory(path = state.cur?.path) {
   let selected = null;
   let text = '';
   const view = box.querySelector('.history-view');
+  const cache = new Map();
+  const load = async (id) => {
+    if (!cache.has(id)) cache.set(id, api('GET', `/api/history/version?path=${enc(path)}&id=${id}`).then((r) => r.content));
+    return cache.get(id);
+  };
+  const current = async () => (state.cur?.path === path ? state.cur.content : (await api('GET', `/api/note?path=${enc(path)}`)).content);
+  const paint = async () => {
+    const id = selected;
+    if (histView === 'preview') {
+      view.innerHTML = `<article class="md">${render(text, previewOpts)}</article>`;
+      enhance(view, richOpts());
+      return;
+    }
+    // Changes: this version against the note as it is now, or against the version before it
+    const i = versions.findIndex((v) => v.id === id);
+    let before;
+    let after;
+    let what;
+    try {
+      if (histAgainst === 'current') { before = text; after = await current(); what = 'since this version'; }
+      else { before = versions[i + 1] ? await load(versions[i + 1].id) : ''; after = text; what = versions[i + 1] ? 'in this version' : 'in the first saved version'; }
+    } catch (e) { return toast(e.message, 'err'); }
+    if (selected !== id) return;
+    const d = diffHtml(before, after);
+    view.innerHTML = d.html
+      ? `<div class="diff-sum"><span class="add">+${d.added}</span> <span class="rem">−${d.removed}</span> lines changed ${what}</div><div class="diff" role="table" aria-label="Changes">${d.html}</div>`
+      : `<div class="history-empty">No changes ${what}.</div>`;
+  };
   const pick = async (id) => {
     selected = id;
     $$('[data-id]', box).forEach((b) => b.classList.toggle('active', b.dataset.id === id));
-    try { text = (await api('GET', `/api/history/version?path=${enc(path)}&id=${id}`)).content; }
+    try { text = await load(id); }
     catch (e) { return toast(e.message, 'err'); }
     if (selected !== id) return;
-    view.innerHTML = `<article class="md">${render(text, previewOpts)}</article>`;
-    enhance(view, richOpts());
+    await paint();
     view.scrollTop = 0;
     $$('[data-act="copy"], [data-act="restore"]', box).forEach((b) => { b.disabled = false; });
   };
+  box.querySelector('.history-against').addEventListener('change', (e) => { histAgainst = e.target.value; store.set('histAgainst', histAgainst); if (selected) paint(); });
   box.addEventListener('click', async (e) => {
     const v = e.target.closest('[data-id]');
     if (v) return pick(v.dataset.id);
+    const mode = e.target.closest('[data-view]');
+    if (mode) {
+      histView = mode.dataset.view;
+      store.set('histView', histView);
+      $$('[data-view]', box).forEach((b) => { b.classList.toggle('active', b === mode); b.setAttribute('aria-pressed', String(b === mode)); });
+      box.querySelector('.history-against').hidden = histView !== 'changes';
+      if (selected) paint();
+      return;
+    }
+    const fold = e.target.closest('[data-fold]');
+    if (fold) { const tpl = fold.nextElementSibling; fold.replaceWith(tpl.content); tpl.remove(); return; }
     const act = e.target.closest('[data-act]')?.dataset.act;
     if (act === 'close') closeLayer();
     if (act === 'copy') copyText(text);

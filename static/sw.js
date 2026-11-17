@@ -2,12 +2,12 @@
 // Notes are cached separately in IndexedDB by the app. Browsers only allow
 // service workers on HTTPS or localhost.
 
-const VERSION = 'pb-0.7.0';
+const VERSION = 'pb-0.8.0';
 const SHELL = [
   '/', '/static/app.css', '/static/app.js', '/static/boot.js', '/static/markdown.js', '/static/editor.js',
   '/static/icons.js', '/static/settings.js', '/static/offline.js', '/static/rich.js', '/static/spell.js',
-  '/static/props.js', '/static/export.js', '/static/print.css',
-  '/static/app/core.js', '/static/app/ui.js', '/static/app/prefs.js', '/static/app/sync.js', '/static/app/tree.js', '/static/app/notes.js', '/static/app/tabs.js', '/static/app/writing.js', '/static/app/layout.js', '/static/app/panels.js', '/static/app/spellui.js', '/static/app/suggest.js', '/static/app/daily.js', '/static/app/commands.js', '/static/app/accounts.js', '/static/app/shell.js',
+  '/static/props.js', '/static/export.js', '/static/diff.js', '/static/print.css',
+  '/static/app/core.js', '/static/app/ui.js', '/static/app/prefs.js', '/static/app/sync.js', '/static/app/tree.js', '/static/app/notes.js', '/static/app/tabs.js', '/static/app/writing.js', '/static/app/layout.js', '/static/app/panels.js', '/static/app/spellui.js', '/static/app/suggest.js', '/static/app/daily.js', '/static/app/commands.js', '/static/app/accounts.js', '/static/app/find.js', '/static/app/mobile.js', '/static/app/hover.js', '/static/app/side.js', '/static/app/shell.js',
   '/static/manifest.webmanifest', '/static/icon.svg',
 ];
 

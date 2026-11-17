@@ -22,6 +22,7 @@
     </div>
 
     <div class="side" id="side">
+      <a class="skip-link" href="#ta" id="skipLink">Skip to the note</a>
       <nav class="rail" aria-label="Actions">
         <div class="logo" title="Polarboard"><i data-icon="logo"></i></div>
         <button class="rail-btn" id="railNew" title="New note (Alt N)" aria-label="New note"><i data-icon="filePlus"></i></button>
@@ -36,6 +37,7 @@
 
       <div class="side-head" role="tablist" aria-label="Panels">
         <button class="ptab" data-panel="files" title="Notes" aria-label="Notes"><i data-icon="folder"></i></button>
+        <button class="ptab" data-panel="starred" title="Starred" aria-label="Starred"><i data-icon="star"></i></button>
         <button class="ptab" data-panel="search" title="Search" aria-label="Search"><i data-icon="search"></i></button>
         <button class="ptab" data-panel="tags" title="Tags" aria-label="Tags"><i data-icon="hash"></i></button>
         <button class="ptab" data-panel="outline" title="Outline" aria-label="Outline"><i data-icon="outline"></i></button>
@@ -51,6 +53,11 @@
             <button class="icon-btn sm" id="collapseBtn" title="Collapse all"><i data-icon="collapse"></i></button>
           </header>
           <div class="tree scroll" id="tree" role="tree"></div>
+        </section>
+
+        <section class="panel" data-panel="starred" hidden>
+          <header class="panel-tools"><span class="panel-title">Starred</span></header>
+          <div class="list scroll" id="starredList"></div>
         </section>
 
         <section class="panel" data-panel="search" hidden>
@@ -122,19 +129,41 @@
       </header>
 
       <section class="workspace" id="workspace" data-mode="write">
+        <div class="findbar" id="findbar" role="search" aria-label="Find in note" hidden>
+          <div class="find-row">
+            <button class="icon-btn sm find-more" id="findMore" title="Replace (Ctrl H)" aria-label="Show replace" aria-expanded="false" aria-controls="replaceRow"><i data-icon="chevron"></i></button>
+            <label class="find-field">
+              <input id="findInput" type="text" placeholder="Find" aria-label="Find" autocomplete="off" spellcheck="false">
+              <button class="find-opt" data-find="case" aria-pressed="false" title="Match case (Alt C)">Aa</button>
+              <button class="find-opt" data-find="word" aria-pressed="false" title="Whole word (Alt W)"><u>ab</u></button>
+              <button class="find-opt" data-find="regex" aria-pressed="false" title="Regular expression (Alt R)">.*</button>
+            </label>
+            <span class="find-count" id="findCount" aria-live="polite"></span>
+            <button class="icon-btn sm" data-step="-1" title="Previous (Shift Enter)" aria-label="Previous match"><i data-icon="arrowUp"></i></button>
+            <button class="icon-btn sm" data-step="1" title="Next (Enter)" aria-label="Next match"><i data-icon="arrowDown"></i></button>
+            <button class="icon-btn sm" id="findClose" title="Close (Esc)" aria-label="Close find"><i data-icon="x"></i></button>
+          </div>
+          <div class="find-row" id="replaceRow" hidden>
+            <span class="find-more-gap"></span>
+            <label class="find-field"><input id="replaceInput" type="text" placeholder="Replace" aria-label="Replace with" autocomplete="off" spellcheck="false"></label>
+            <button class="btn sm ghost" id="replaceOne" title="Replace (Enter)">Replace</button>
+            <button class="btn sm ghost" id="replaceAll" title="Replace all (Ctrl Alt Enter)">All</button>
+          </div>
+        </div>
         <div class="pane edit-pane scroll" id="editPane">
           <div class="sheet">
             <input class="title-input" id="titleInput" placeholder="Untitled" spellcheck="false" autocomplete="off" aria-label="Note title">
             <div class="note-tags" id="noteTags"></div>
             <div class="props" id="props" hidden></div>
             <div class="editor" id="editor">
+              <pre class="finds" id="finds" aria-hidden="true"></pre>
               <pre class="hl" id="hl" aria-hidden="true"></pre>
               <pre class="lints" id="lints" aria-hidden="true"></pre>
               <textarea id="ta" placeholder="Start writing…" aria-label="Note body"></textarea>
             </div>
           </div>
         </div>
-        <div class="pane preview-pane scroll" id="previewPane">
+        <div class="pane preview-pane scroll" id="previewPane" tabindex="-1" aria-label="Preview">
           <div class="sheet">
             <h1 class="title-view" id="titleView"></h1>
             <div class="note-tags" id="noteTagsView"></div>
@@ -156,10 +185,22 @@
             </div>
           </div>
         </div>
+        <div class="side-divider" id="sideDivider" role="separator" aria-orientation="vertical" aria-label="Resize the side note (arrow keys)" tabindex="0" hidden></div>
+        <aside class="pane side-pane scroll" id="sidePane" aria-label="Note to the side" hidden>
+          <header class="side-head-bar">
+            <button class="icon-btn sm" id="sideBack" title="Back" aria-label="Back" disabled><i data-icon="arrowLeft"></i></button>
+            <button class="side-title" id="sideTitle"></button>
+            <span class="badge">Read only</span>
+            <button class="icon-btn sm" id="sideSwap" title="Swap with the editor" aria-label="Swap with the editor"><i data-icon="swap"></i></button>
+            <button class="icon-btn sm" id="sideOpen" title="Open in a new tab" aria-label="Open in a new tab"><i data-icon="plus"></i></button>
+            <button class="icon-btn sm" id="sideClose" title="Close" aria-label="Close the side note"><i data-icon="x"></i></button>
+          </header>
+          <div class="sheet side-sheet" id="sideBody"></div>
+        </aside>
       </section>
 
       <footer class="statusbar" id="status">
-        <button class="st sync" id="stSync" data-state="synced" title="Sync status"><i class="dot"></i><span>Synced</span></button>
+        <button class="st sync" id="stSync" data-state="synced" title="Sync status" aria-live="polite"><i class="dot"></i><span>Synced</span></button>
         <button class="st lint-st" id="stLint" hidden title="Writing checks"><i class="lint-dot"></i><span></span></button>
         <span class="st" id="stWords"></span>
         <span class="st hide-sm" id="stChars"></span>

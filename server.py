@@ -33,7 +33,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 STARTED = time.time()
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -63,7 +63,10 @@ DEFAULT_CONFIG = {
     "trashDays": 30,
     "attachmentFolder": "attachments",
     "git": {"enabled": False, "interval": 30, "remote": "", "push": False, "message": "Polarboard: {count} files changed"},
+    "backup": {"enabled": False, "every": "daily", "hour": 3, "day": 6, "keep": 7, "history": False},
 }
+# Scheduled backups land in BACKUP_ROOT/<account id>/. Mount a NAS folder here to keep them off the server.
+BACKUP_ROOT = Path(os.environ.get("POLARBOARD_BACKUPS", "") or DATA / "backups").resolve()
 GITIGNORE = "# Added by Polarboard\n.trash/\n.polarboard/history/\n.polarboard/auth.json\n.polarboard/config.json\n.polarboard/trash.json\n.polarboard/search.db*\n*.tmp\n"
 MAX_IMPORT = 300 * 1024 * 1024
 IMPORT_TEXT = {".md", ".markdown", ".txt"}
@@ -117,6 +120,12 @@ class Raw:
 
 class Stream:
     """Marks a route that streams Server-Sent Events."""
+
+
+class Cached:
+    """A JSON response with an ETag; clients that already have it get 304 Not Modified."""
+    def __init__(self, body, etag):
+        self.body, self.etag = body, etag
 
 
 def now_ms():
@@ -263,6 +272,9 @@ class Vault:
         self.last_purge = 0.0
         self.git_last = time.time()
         self.git_error = ""
+        self.meta_rev = 0
+        self.meta_dirty = False
+        self.tree_cache = None
         self.index_lock = threading.Lock()
         self.index_dirty = True
         self.index_checked = 0.0
@@ -279,6 +291,8 @@ class Vault:
 
     # -- persistence
     def save_meta(self):
+        self.meta_rev += 1
+        self.meta_dirty = False
         save_json(self.polar / "meta.json", self.meta)
 
     def save_config(self):
@@ -330,6 +344,31 @@ class Vault:
             for f in sorted(filenames):
                 if f.lower().endswith(".md") and not f.startswith("."):
                     yield here / f
+
+    def scan(self):
+        """One walk over the vault: notes (with their stat), folders, and other files."""
+        notes, folders, files = [], [], []
+        attach = self.attach_rel()
+        base = str(self.root)
+        for dirpath, dirnames, filenames in os.walk(base):
+            rel_here = dirpath[len(base) + 1:].replace(os.sep, "/")
+            in_attach = rel_here == attach or rel_here.startswith(attach + "/")
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            if not in_attach:
+                folders += [f"{rel_here}/{d}" if rel_here else d for d in dirnames if (f"{rel_here}/{d}" if rel_here else d) != attach]
+            for f in sorted(filenames):
+                if f.startswith("."):
+                    continue
+                rel = f"{rel_here}/{f}" if rel_here else f
+                if f.lower().endswith(".md"):
+                    if not in_attach:
+                        try:
+                            notes.append((rel, os.stat(os.path.join(dirpath, f))))
+                        except OSError:
+                            pass
+                else:
+                    files.append(rel)
+        return notes, sorted(folders), sorted(files)
 
     def files(self):
         """Non-note files (images, PDFs), wherever they are, for resolving embeds."""
@@ -396,6 +435,7 @@ class Vault:
         if "created" not in entry:
             born = getattr(st, "st_birthtime", None) or st.st_mtime
             entry["created"] = int(born * 1000)
+            self.meta_dirty = True
         return entry["created"]
 
     def tags_for(self, path, rel, st):
@@ -428,6 +468,7 @@ class Vault:
             "ownTags": own,
             "inherited": inherited,
             "pinned": bool(self.meta.get(rel, {}).get("pinned")),
+            "starred": self.meta.get(rel, {}).get("starred"),
         }
 
     def meta_move(self, old, new):
@@ -646,10 +687,16 @@ class Vault:
         return {"committed": committed, "files": len(status)}
 
 
-def git_loop():
+def background_loop():
+    """Scheduled work, checked every 30 seconds: backups, then git commits."""
     while True:
         time.sleep(30)
         for v in list(VAULTS.values()):
+            try:
+                if backup_due(v):
+                    run_backup(v)
+            except Exception as e:  # keep going; a failing disk shouldn't stop git or other accounts
+                print(f"backup failed for {v.id}: {e!r}", file=sys.stderr)
             g = v.config.get("git", {})
             if g.get("enabled") and GIT and time.time() - v.git_last >= max(1, g.get("interval", 30)) * 60:
                 try:
@@ -827,23 +874,26 @@ def seed(v):
 # Vault routes receive (handler, vault, query); global routes (handler, query).
 
 def api_tree(h, v, q):
+    """The whole sidebar. Rebuilt only when a file, the metadata or the account changed;
+    a client that already has this version gets 304 Not Modified."""
     with v.lock:
         v.purge_trash()
-        notes, before = [], json.dumps(v.meta, sort_keys=True)
-        folders = v.folders()
-        for p in v.iter_notes():
-            try:
-                notes.append(v.note_info(p))
-            except OSError:
-                pass
-        folder_meta = {}
-        for f in folders:
-            m = {k: val for k, val in v.meta.get(f, {}).items() if k in ("sort", "note", "tags")}
-            if m:
-                folder_meta[f] = m
-        if json.dumps(v.meta, sort_keys=True) != before:
-            v.save_meta()
-        return {"folders": folders, "notes": notes, "folderMeta": folder_meta, "files": v.files(), "vault": v.public()}
+        notes, folders, files = v.scan()
+        stamp = [[rel, st.st_mtime_ns, st.st_size] for rel, st in notes]
+        fingerprint = lambda: sha(json.dumps([stamp, folders, files, v.meta_rev, v.attach_rel(), account_public(v.id)]))
+        key = fingerprint()
+        if not v.tree_cache or v.tree_cache[0] != key:
+            infos = [v.note_info(v.root / rel, st) for rel, st in notes]
+            folder_meta = {}
+            for f in folders:
+                m = {k: val for k, val in v.meta.get(f, {}).items() if k in ("sort", "note", "tags")}
+                if m:
+                    folder_meta[f] = m
+            if v.meta_dirty:  # first sight of a note records when it was created
+                v.save_meta()
+                key = fingerprint()
+            v.tree_cache = (key, {"folders": folders, "notes": infos, "folderMeta": folder_meta, "files": files, "vault": v.public()})
+        return Cached(v.tree_cache[1], f'"{key[:24]}"')
 
 
 def api_note_get(h, v, q):
@@ -964,6 +1014,8 @@ def api_meta(h, v, q):
             entry["tags"] = clean_tags(changes["tags"])
         if p.is_file() and "pinned" in changes:
             entry["pinned"] = bool(changes["pinned"])
+        if p.is_file() and "starred" in changes:
+            entry["starred"] = (entry.get("starred") or now_ms()) if changes["starred"] else None
         if p.is_dir() and "sort" in changes:
             entry["sort"] = changes["sort"] if changes["sort"] in SORTS else None
         if p.is_dir() and "note" in changes:
@@ -1433,13 +1485,23 @@ def api_config_put(h, v, q):
             gc["remote"] = str(g["remote"]).strip()[:500]
         if "message" in g:
             gc["message"] = str(g["message"]).strip()[:200] or DEFAULT_CONFIG["git"]["message"]
+        bk, bc = body.get("backup") or {}, v.config["backup"]
+        if "enabled" in bk:
+            bc["enabled"] = bool(bk["enabled"])
+        if "history" in bk:
+            bc["history"] = bool(bk["history"])
+        if bk.get("every") in ("hourly", "daily", "weekly"):
+            bc["every"] = bk["every"]
+        bc["hour"] = clamp(bk.get("hour"), 0, 23, bc["hour"])
+        bc["day"] = clamp(bk.get("day"), 0, 6, bc["day"])
+        bc["keep"] = clamp(bk.get("keep"), 1, 365, bc["keep"])
         v.save_config()
         v.prune_all_history()
         return v.config
 
 
-def api_export(h, v, q):
-    with_history = q.get("history") == "1"
+def make_backup(v, with_history=False):
+    """A zip of the account's notes, attachments and metadata. Secrets and caches are left out."""
     buf = io.BytesIO()
     with v.lock, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for dirpath, dirnames, files in os.walk(v.root):
@@ -1452,9 +1514,102 @@ def api_export(h, v, q):
                 if p == v.polar / "auth.json" or f.endswith(".tmp") or f.startswith("search.db"):  # no secrets; the index rebuilds
                     continue
                 z.write(p, v.rel(p))
-    stamp = time.strftime("%Y%m%d-%H%M")
+    return buf.getvalue()
+
+
+def backup_name(v):
     name = re.sub(r"[^\w-]+", "-", v.name).strip("-").lower() or "vault"
-    return Raw(buf.getvalue(), "application/zip", {"Content-Disposition": f'attachment; filename="polarboard-{name}-{stamp}.zip"'})
+    return f"polarboard-{name}-{time.strftime('%Y%m%d-%H%M')}.zip"
+
+
+def api_export(h, v, q):
+    return Raw(make_backup(v, q.get("history") == "1"), "application/zip", {"Content-Disposition": f'attachment; filename="{backup_name(v)}"'})
+
+
+# -- scheduled backups
+BACKUP_FILE = re.compile(r"^polarboard-[\w-]+-\d{8}-\d{6}\.zip$")
+
+
+def backup_dir(v):
+    return BACKUP_ROOT / v.id
+
+
+def list_backups(v):
+    d = backup_dir(v)
+    if not d.is_dir():
+        return []
+    out = []
+    for f in d.iterdir():
+        if BACKUP_FILE.match(f.name):
+            st = f.stat()
+            out.append({"name": f.name, "size": st.st_size, "time": int(st.st_mtime * 1000)})
+    return sorted(out, key=lambda b: -b["time"])
+
+
+def run_backup(v):
+    cfg = v.config["backup"]
+    d = backup_dir(v)
+    d.mkdir(parents=True, exist_ok=True)
+    name = f"polarboard-{v.id}-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    atomic_write(d / name, make_backup(v, bool(cfg.get("history"))))
+    for old in list_backups(v)[max(1, int(cfg.get("keep") or 7)):]:
+        (d / old["name"]).unlink(missing_ok=True)
+    return name
+
+
+def backup_schedule(v, now=None):
+    """(due now?, when the next one runs) for the account's backup schedule."""
+    cfg = v.config["backup"]
+    now = now or time.time()
+    found = list_backups(v)
+    last = found[0]["time"] / 1000 if found else 0
+    if cfg.get("every") == "hourly":
+        nxt = last + 3600 - 60
+        return nxt <= now, max(nxt, now)
+    period = 7 * 86400 if cfg.get("every") == "weekly" else 86400
+    local = time.localtime(now)
+    sched = time.mktime((local.tm_year, local.tm_mon, local.tm_mday, int(cfg.get("hour", 3)), 0, 0, 0, 0, -1))
+    if period > 86400:
+        sched -= ((local.tm_wday - int(cfg.get("day", 6))) % 7) * 86400
+    while sched > now:
+        sched -= period
+    # sched is now the most recent scheduled moment. Missed it (server was off)? Run now.
+    return (last < sched, now if last < sched else sched + period)
+
+
+def backup_due(v, now=None):
+    return bool(v.config["backup"].get("enabled")) and backup_schedule(v, now)[0]
+
+
+def api_backups(h, v, q):
+    on = v.config["backup"].get("enabled")
+    return {"folder": str(backup_dir(v)), "backups": list_backups(v), "config": v.config["backup"],
+            "next": int(backup_schedule(v)[1] * 1000) if on else None}
+
+
+def api_backup_run(h, v, q):
+    require_person(h)
+    return {"name": run_backup(v), "backups": list_backups(v)}
+
+
+def backup_path(v, name):
+    if not BACKUP_FILE.match(name or ""):
+        raise ApiError(400, "Bad backup name")
+    p = backup_dir(v) / name
+    if not p.is_file():
+        raise ApiError(404, "Backup not found")
+    return p
+
+
+def api_backup_file(h, v, q):
+    p = backup_path(v, q.get("name"))
+    return Raw(p.read_bytes(), "application/zip", {"Content-Disposition": f'attachment; filename="{p.name}"'})
+
+
+def api_backup_delete(h, v, q):
+    require_person(h)
+    backup_path(v, q.get("name")).unlink()
+    return {"backups": list_backups(v)}
 
 
 def api_events(h, v, q):
@@ -1818,6 +1973,10 @@ VAULT_ROUTES = {
     ("DELETE", "/api/account"): api_account_delete,
     ("GET", "/api/sessions"): api_sessions,
     ("DELETE", "/api/sessions"): api_session_delete,
+    ("GET", "/api/backups"): api_backups,
+    ("POST", "/api/backups/run"): api_backup_run,
+    ("GET", "/api/backups/file"): api_backup_file,
+    ("DELETE", "/api/backups"): api_backup_delete,
     ("GET", "/api/git"): api_git,
     ("POST", "/api/git/commit"): api_git_commit,
 }
@@ -2044,6 +2203,15 @@ class Handler(BaseHTTPRequestHandler):
             return self.stream(v)
         if isinstance(result, Raw):
             return self.send(200, result.data, result.ctype, {"Cache-Control": "no-store", **result.headers})
+        if isinstance(result, Cached):
+            if self.headers.get("If-None-Match") == result.etag:
+                self.send_response(304)
+                self.send_header("ETag", result.etag)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            return self.send(200, json.dumps(result.body).encode(), "application/json; charset=utf-8",
+                             {"Cache-Control": "no-cache", "ETag": result.etag})
         self.send_json(200, result)
 
     def stream(self, v):
@@ -2101,7 +2269,7 @@ def main():
     SERVER_DIR.mkdir(parents=True, exist_ok=True)
     load_registry()
     seed(VAULTS["main"])
-    threading.Thread(target=git_loop, daemon=True).start()
+    threading.Thread(target=background_loop, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     locked = sum(1 for a in REGISTRY["accounts"].values() if a.get("password"))

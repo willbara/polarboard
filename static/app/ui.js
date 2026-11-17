@@ -1,10 +1,11 @@
 import { esc } from '../markdown.js';
 import { icon } from '../icons.js';
 import { allCommands, comboLabel, keyFor } from './commands.js';
-import { $, $$, cleanName, dirname, el, state, stem } from './core.js';
+import { $, $$, cleanName, dirname, el, mobile, state, stem } from './core.js';
 import { defaultFolder, newNote } from './notes.js';
 import { newTab, openNote } from './tabs.js';
 import { block } from './writing.js';
+import { openSide } from './side.js';
 
 // ------------------------------------------------------------------ menu / dialog / toast
 export let layerCleanup = null;
@@ -15,8 +16,31 @@ export function closeLayer() {
   el.layer.innerHTML = '';
 }
 
+/** Focus goes back to where it was when a menu or dialog closes, unless something else took it. */
+export function focusReturn() {
+  const prev = document.activeElement;
+  return () => {
+    const now = document.activeElement;
+    if (prev?.isConnected && prev !== document.body && (!now || now === document.body || !now.isConnected)) prev.focus({ preventScroll: true });
+  };
+}
+
+/** Keep Tab and Shift Tab inside a dialog. */
+export function trapTab(e, box) {
+  if (e.key !== 'Tab') return;
+  const items = $$('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])', box)
+    .filter((x) => !x.disabled && x.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0];
+  const last = items[items.length - 1];
+  if (!box.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+  else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+
 export function menu(anchor, items) {
   closeLayer();
+  const back = focusReturn();
   const m = document.createElement('div');
   m.className = 'menu glass';
   m.setAttribute('role', 'menu');
@@ -50,19 +74,18 @@ export function menu(anchor, items) {
   m.querySelector('button')?.focus({ preventScroll: true });
   const away = (e) => { if (!m.contains(e.target)) closeLayer(); };
   const key = (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); closeLayer(); }
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const bs = $$('button', m);
-      const i = bs.indexOf(document.activeElement);
-      bs[(i + (e.key === 'ArrowDown' ? 1 : -1) + bs.length) % bs.length].focus();
-    }
+    if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); closeLayer(); }
+    const bs = $$('button', m);
+    const i = bs.indexOf(document.activeElement);
+    const go = { ArrowDown: i + 1, ArrowUp: i - 1, Home: 0, End: bs.length - 1 }[e.key];
+    if (go !== undefined && bs.length) { e.preventDefault(); bs[(go + bs.length) % bs.length].focus(); }
   };
   let armed = false;
   const timer = setTimeout(() => { armed = true; document.addEventListener('pointerdown', away, true); document.addEventListener('keydown', key, true); });
   layerCleanup = () => {
     clearTimeout(timer);
     if (armed) { document.removeEventListener('pointerdown', away, true); document.removeEventListener('keydown', key, true); }
+    queueMicrotask(back);
   };
 }
 
@@ -72,6 +95,7 @@ export function menu(anchor, items) {
  */
 export function dialog({ title, text, input, pick, buttons = [], content, cls = '', stack = false }) {
   if (!stack) closeLayer();
+  const back = focusReturn();
   return new Promise((resolve) => {
     const bd = document.createElement('div');
     bd.className = 'backdrop';
@@ -92,6 +116,7 @@ export function dialog({ title, text, input, pick, buttons = [], content, cls = 
       document.removeEventListener('keydown', onKey, true);
       bd.remove();
       if (layerCleanup === cleanup) layerCleanup = null;
+      back();
       resolve(v);
     };
     const cleanup = () => done(null);
@@ -99,6 +124,7 @@ export function dialog({ title, text, input, pick, buttons = [], content, cls = 
     const onKey = (e) => {
       if (el.layer.lastElementChild !== bd) return; // only the top dialog listens
       if (e.key === 'Escape') { e.preventDefault(); done(null); }
+      trapTab(e, box);
       if (e.key === 'Enter' && field && document.activeElement === field) {
         e.preventDefault();
         const p = buttons.find((b) => b.primary);
@@ -117,12 +143,19 @@ export function dialog({ title, text, input, pick, buttons = [], content, cls = 
     if (!stack) layerCleanup = cleanup;
     if (field) { field.focus(); field.select(); }
     else if (!content) box.querySelector('.btn.primary, .btn.danger, .pick button, .btn')?.focus();
+    else requestAnimationFrame(() => { if (!box.contains(document.activeElement)) box.querySelector('button, input, select, textarea, [href]')?.focus({ preventScroll: true }); });
   });
 }
 
 export let toastBox;
 export function toast(msg, kind = '') {
-  if (!toastBox) { toastBox = document.createElement('div'); toastBox.className = 'toasts'; document.body.appendChild(toastBox); }
+  if (!toastBox) {
+    toastBox = document.createElement('div');
+    toastBox.className = 'toasts';
+    toastBox.setAttribute('role', 'status'); // screen readers announce each toast
+    toastBox.setAttribute('aria-live', 'polite');
+    document.body.appendChild(toastBox);
+  }
   const t = document.createElement('div');
   t.className = `toast glass ${kind}`;
   t.textContent = msg;
@@ -162,14 +195,14 @@ export function markMatch(s, idx) {
 }
 
 // ------------------------------------------------------------------ quick switcher & command palette
-export function picker({ placeholder, source }) {
+export function picker({ placeholder, source, sideHint = false }) {
   closeLayer();
   const bd = document.createElement('div');
   bd.className = 'backdrop picker-backdrop';
   bd.innerHTML = `<div class="picker glass" role="dialog" aria-label="${esc(placeholder)}">
     <input class="picker-input" placeholder="${esc(placeholder)}" spellcheck="false" autocomplete="off">
     <div class="picker-list scroll" role="listbox"></div>
-    <div class="picker-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Ctrl Enter</kbd> new tab</span><span><kbd>Esc</kbd> close</span></div>
+    <div class="picker-foot"><span><kbd>↑</kbd><kbd>↓</kbd> move</span><span><kbd>Enter</kbd> open</span><span><kbd>Ctrl Enter</kbd> new tab</span>${sideHint ? '<span><kbd>Alt Enter</kbd> to the side</span>' : ''}<span><kbd>Esc</kbd> close</span></div>
   </div>`;
   const input = bd.querySelector('input');
   const list = bd.querySelector('.picker-list');
@@ -183,7 +216,7 @@ export function picker({ placeholder, source }) {
   };
   const update = () => { items = source(input.value.trim()); i = 0; draw(); };
   const close = () => { document.removeEventListener('keydown', onKey, true); bd.remove(); if (layerCleanup === close) layerCleanup = null; };
-  const choose = (it, e) => { if (!it) return; close(); it.run({ newTab: e.ctrlKey || e.metaKey, query: input.value.trim() }); };
+  const choose = (it, e) => { if (!it) return; close(); it.run({ newTab: e.ctrlKey || e.metaKey, side: e.altKey, query: input.value.trim() }); };
   const onKey = (e) => {
     if (e.key === 'Escape') { e.preventDefault(); close(); }
     else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); i = (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % Math.max(1, items.length); draw(); }
@@ -201,9 +234,11 @@ export function picker({ placeholder, source }) {
   input.focus();
 }
 
-export function quickSwitcher() {
+export function quickSwitcher({ toSide = false } = {}) {
+  const sideOk = !mobile.matches;
   picker({
-    placeholder: 'Open a note…',
+    placeholder: toSide ? 'Open a note to the side…' : 'Open a note…',
+    sideHint: sideOk && !toSide,
     source: (q) => {
       const notes = state.tree.notes;
       let out;
@@ -223,7 +258,7 @@ export function quickSwitcher() {
         label: stem(n.path),
         html: onName ? markMatch(stem(n.path), idx) : esc(stem(n.path)),
         detail: dirname(n.path) || '',
-        run: ({ newTab }) => openNote(n.path, { newTab }),
+        run: ({ newTab, side }) => ((toSide || side) && sideOk ? openSide(n.path) : openNote(n.path, { newTab })),
       }));
       if (q && !notes.some((n) => stem(n.path).toLowerCase() === q.toLowerCase())) {
         items.push({ icon: 'filePlus', label: `Create “${q}”`, detail: defaultFolder() || 'Vault root', run: ({ newTab }) => newNote(defaultFolder(), cleanName(q), { editTitle: false, newTab }) });

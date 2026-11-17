@@ -33,6 +33,7 @@ All settings are environment variables:
 | `POLARBOARD_HOST` | `0.0.0.0` | Address to bind |
 | `POLARBOARD_PASSWORD` | *(empty)* | A server password, required to create or delete accounts |
 | `POLARBOARD_LOG` | *(empty)* | Set to `1` to log every request |
+| `POLARBOARD_BACKUPS` | `$POLARBOARD_DATA/backups` | Where scheduled backups are written, one folder per account. Point it at a NAS or a second disk |
 
 ## Layout on disk
 
@@ -84,6 +85,12 @@ curl -X POST -H "Authorization: Bearer pb_…" \
 - **Slash menu:** type `/` at the start of a line for headings, checklists, tables, callouts, code, math, diagrams, embeds, templates and more.
 - **Tables:** inside a table, `Tab` and `Shift Tab` move between cells and line the columns up. `Enter` at the end of a row adds a row, and `Ctrl Shift L` tidies the whole table.
 - **Embedded notes:** a line with just `![[Other note]]` shows that note inside this one, and `![[Other note#Heading]]` shows only that section.
+- **Find and replace:** `Ctrl F` finds in the open note (in writing or reading mode), `Ctrl H` also replaces. Match case, whole words and regular expressions (with `$1` in the replacement) are buttons in the bar. Replace all is a single step to undo.
+- **Hover previews:** rest the mouse on a `[[link]]` to read that note without leaving this one. Turn it off in **Settings → Editor → Preview**.
+- **Side by side:** right-click a note and choose **Open to the side** (or `Ctrl Alt O`, or `Alt Enter` in the quick switcher) to read a second note next to the one you're writing. Drag the divider to resize it; links inside it open in the same pane, `Ctrl` click opens them in the editor. Not on phones.
+- **Starred notes:** star the notes you come back to (`Alt S`, or right-click a note) and they're listed in the ★ panel of the sidebar.
+- **On a phone:** swipe in from the left edge for the sidebar, press and hold a note for its menu. On iPhone the formatting bar stays just above the keyboard.
+- **Keyboard:** in the note list, arrow keys move and open folders, `Enter` opens, `F2` renames, `Delete` deletes and `Shift F10` opens the menu. Menus and dialogs give focus back when they close.
 - **Properties:** add them from the note menu, the palette or `/properties`. They're saved as standard front matter (Obsidian reads it too) and shown as a small panel above the note. Notes without properties don't show the panel at all.
 
 ## Search
@@ -120,10 +127,11 @@ The app itself is installable and opens offline too, but browsers only allow tha
 
 ## History, git, trash and backups
 
-- **Version history:** earlier versions of notes are kept as you edit (at most every 10 minutes by default). Browse and restore them with `Alt H` or a note's right-click menu.
+- **Version history:** earlier versions of notes are kept as you edit (at most every 10 minutes by default). Browse and restore them with `Alt H` or a note's right-click menu. Switch to **Changes** to see what's different since a version, or what that version changed, with the edited words marked.
 - **Git (optional):** turn it on in **Settings → Sync** to commit the vault on a schedule, and optionally push to a remote. Use an SSH key on the server for pushing. Off by default.
 - **Trash:** deleted notes go to `.trash`. Restore them from **Settings → Sync**. The trash empties itself after 30 days by default.
 - **Backups:** **Settings → Sync → Download .zip** gives you the account's notes. Tokens are left out.
+- **Scheduled backups (optional):** turn them on in **Settings → Sync → Backup**: hourly, daily or weekly at a time you pick, keeping the last 3 to 90. The zips are written on the server to `POLARBOARD_BACKUPS` (by default `data/backups/<account>/`), and can be downloaded or deleted from the same page. If the server was off at the scheduled time, the backup runs as soon as it's back. Mount a NAS folder there (see `compose.yaml`) so a backup survives the server's own disk failing.
 
 ## Sharing
 
@@ -143,6 +151,9 @@ Right-click a note and choose **Share link** to get a read-only link (optionally
 | `Alt T` / `Alt W` | New tab / close tab |
 | `Alt H` | Version history |
 | `Ctrl S` | Save and sync now |
+| `Ctrl F` / `Ctrl H` | Find / find and replace (`F3`, `Shift F3` next and previous) |
+| `Alt S` | Star or unstar the note |
+| `Ctrl Alt O` | Open a note to the side |
 | `F8` | Next writing suggestion |
 | `Ctrl B` / `Ctrl I` / `Ctrl K` | Bold / italic / link |
 | `Ctrl Shift L` | Tidy the table under the cursor |
@@ -155,7 +166,9 @@ Every shortcut can be changed in **Settings → Hotkeys**. Firefox keeps `Ctrl S
 server.py              stdlib-only HTTP server + JSON API
 static/index.html      page shell          static/share.html   shared-note page
 static/app.css         look and feel       static/sw.js        offline app shell
-static/app.js          app logic           static/offline.js   offline note cache
+static/app.js          loads static/app/  static/offline.js   offline note cache
+static/app/*.js        the app, one module per area (tree, tabs, writing, find, side, …)
+static/diff.js         line and word differences for version history
 static/settings.js     settings window     static/spell.js     Harper integration
 static/editor.js       editor commands     static/rich.js      code, math, diagrams
 static/props.js        properties panel    static/export.js    PDF and HTML export

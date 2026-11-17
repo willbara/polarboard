@@ -103,12 +103,16 @@ export class Spell {
     return Object.keys(config).sort().map((name) => ({ name, on: config[name] !== false, description: descriptions[name] || '' }));
   }
 
-  /** Lint markdown text. Returns null if a newer request replaced this one. */
-  async check(text, groups) {
+  /**
+   * Lint markdown text. Returns null if a newer request on the same channel replaced
+   * this one (the main editor and the block editor in the preview use separate channels).
+   */
+  async check(text, groups, channel = 'main') {
     const linter = await this.start();
-    const mine = ++this.seq;
+    this.seqs ||= {};
+    const mine = this.seqs[channel] = (this.seqs[channel] || 0) + 1;
     const raw = await linter.lint(text, { language: 'markdown' });
-    if (mine !== this.seq) return null;
+    if (mine !== this.seqs[channel]) return null;
     const skip = skippedRanges(text);
     const toU = charToUtf16(text);
     const out = [];

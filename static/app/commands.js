@@ -13,6 +13,9 @@ import { save, syncNow } from './sync.js';
 import { closeTab, newTab, switchTab } from './tabs.js';
 import { commandPalette, quickSwitcher } from './ui.js';
 import { addProperties, block } from './writing.js';
+import { toggleStar } from './tree.js';
+import { find, findStep, openFind } from './find.js';
+import { closeSide, swapSide } from './side.js';
 
 // ------------------------------------------------------------------ hotkeys
 export const CODE_KEYS = {
@@ -73,6 +76,15 @@ export const COMMANDS = [
   { id: 'insertTemplate', group: 'General', label: 'Insert a template', def: 'Alt+Shift+T', icon: 'template', run: () => insertTemplate() },
   { id: 'outline', group: 'General', label: 'Show the outline', def: 'Alt+O', icon: 'outline', run: () => showPanel('outline', true) },
   { id: 'backlinks', group: 'General', label: 'Show backlinks', def: 'Alt+B', icon: 'link', run: () => showPanel('links', true) },
+  { id: 'find', group: 'General', label: 'Find in this note', def: 'Mod+F', icon: 'search', run: () => openFind(false) },
+  { id: 'replace', group: 'General', label: 'Find and replace', def: 'Mod+H', icon: 'search', run: () => openFind(true) },
+  { id: 'findNext', group: 'General', label: 'Next match', def: 'F3', run: () => (find.open ? findStep(1) : openFind(false)) },
+  { id: 'findPrev', group: 'General', label: 'Previous match', def: 'Shift+F3', run: () => (find.open ? findStep(-1) : openFind(false)) },
+  { id: 'openSide', group: 'General', label: 'Open a note to the side', def: 'Mod+Alt+O', icon: 'columns', run: () => quickSwitcher({ toSide: true }) },
+  { id: 'closeSide', group: 'General', label: 'Close the side note', def: '', icon: 'x', run: () => closeSide() },
+  { id: 'swapSide', group: 'General', label: 'Swap the side note with the editor', def: '', icon: 'swap', run: () => swapSide() },
+  { id: 'star', group: 'General', label: 'Star or unstar this note', def: 'Alt+S', icon: 'star', run: () => state.cur && toggleStar(state.cur.path) },
+  { id: 'starred', group: 'General', label: 'Show starred notes', def: '', icon: 'star', run: () => showPanel('starred', true) },
   { id: 'export', group: 'General', label: 'Export this note (PDF, HTML, Markdown)', def: '', icon: 'download', run: () => exportDialog() },
   { id: 'properties', group: 'Editor', label: 'Add properties', def: '', icon: 'outline', run: () => addProperties() },
   { id: 'formatTable', group: 'Editor', label: 'Tidy the table', def: 'Mod+Shift+L', scope: 'editor', icon: 'layout', run: edit(commands.formatTable) },
@@ -136,8 +148,8 @@ document.addEventListener('keydown', (e) => {
   const inEditor = document.activeElement === el.ta || !!document.activeElement?.classList?.contains('block-ta');
   for (const c of COMMANDS) {
     if (keyFor(c.id) !== combo || (c.scope === 'editor' && !inEditor)) continue;
+    if (c.run() === false) return; // nothing to do here: leave the key to the browser
     e.preventDefault();
-    c.run();
     return;
   }
 });

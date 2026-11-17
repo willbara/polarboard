@@ -10,10 +10,15 @@ services:
       # Everything Polarboard keeps: ./data/vault holds the first account's notes,
       # ./data/vaults/* the accounts added in the app. :Z relabels for SELinux (Fedora); harmless elsewhere.
       - ./data:/data:Z
+      # Optional: keep scheduled backups somewhere else, e.g. a NAS share mounted on the host,
+      # and set POLARBOARD_BACKUPS below to match.
+      # - /mnt/nas/polarboard-backups:/backups:Z
       # Optional, for git push over SSH: mount a key the container can use.
       # - ~/.ssh/polarboard_ed25519:/root/.ssh/id_ed25519:ro,Z
     environment:
       # Optional server password: required to add or delete accounts. Each account
       # can also have its own password, set in Settings → General.
       POLARBOARD_PASSWORD: ""
+      # Where scheduled backups go (default /data/backups). Turn them on in Settings → Sync.
+      # POLARBOARD_BACKUPS: /backups
     restart: unless-stopped

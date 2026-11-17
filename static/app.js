@@ -17,6 +17,10 @@ import './app/suggest.js';
 import './app/daily.js';
 import './app/commands.js';
 import './app/accounts.js';
+import './app/find.js';
+import './app/mobile.js';
+import './app/hover.js';
+import './app/side.js';
 import { boot } from './app/shell.js';
 
 boot();

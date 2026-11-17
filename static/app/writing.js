@@ -9,11 +9,12 @@ import { setMode } from './layout.js';
 import { findNote } from './notes.js';
 import { outlineSoon, renderOutline, renderTags, showPanel } from './panels.js';
 import { setSetting } from './prefs.js';
-import { clearLints, resetLintText, scheduleLint, shiftLints } from './spellui.js';
+import { blockLints, clearLints, resetLintText, scheduleLint, shiftLints, spellOn } from './spellui.js';
 import { checkSuggest, closeSuggest, suggestKey } from './suggest.js';
 import { manual, pending, resolveConflict, scheduleSave, setSync, syncNow } from './sync.js';
 import { toast } from './ui.js';
 import { edit } from './commands.js';
+import { find, refreshFind } from './find.js';
 
 // ------------------------------------------------------------------ editor
 /**
@@ -40,7 +41,7 @@ export function setEditorValue(text, keepSelection = false) {
 export let hlFrame = 0;
 export function renderHL() {
   cancelAnimationFrame(hlFrame);
-  hlFrame = requestAnimationFrame(() => { el.hl.innerHTML = highlight(el.ta.value); });
+  hlFrame = requestAnimationFrame(() => { el.hl.innerHTML = highlight(el.ta.value); if (find.open) refreshFind(); });
 }
 
 export const vaultUrl = (rel) => `/vault/${enc(VAULT)}/${rel.split('/').map(enc).join('/')}`;
@@ -63,7 +64,7 @@ export function renderPreview(now = false) {
   const go = () => {
     el.preview.innerHTML = render(el.ta.value, { ...previewOpts, lines: true });
     el.preview.classList.toggle('editable', previewEditable());
-    expandEmbeds(el.preview).then(() => enhance(el.preview, richOpts()));
+    expandEmbeds(el.preview).then(() => { enhance(el.preview, richOpts()); if (find.open) refreshFind(); });
   };
   if (now) go(); else previewTimer = setTimeout(go, mode === 'split' ? 250 : 120);
 }
@@ -310,13 +311,14 @@ export function startBlockEdit(target, atEnd = false) {
   const src = lines.slice(a, b).join('\n');
   const wrap = document.createElement('div');
   wrap.className = 'block-editor';
-  wrap.innerHTML = `<textarea class="block-ta" spellcheck="${state.settings.spellEngine === 'browser'}" aria-label="Edit this block"></textarea>
+  wrap.innerHTML = `<div class="block-field"><textarea class="block-ta" spellcheck="${state.settings.spellEngine === 'browser'}" aria-label="Edit this block"></textarea><pre class="block-lints" aria-hidden="true"></pre></div>
     <div class="block-hint"><span>Markdown</span><span><kbd>Ctrl Enter</kbd> or click outside to finish · <kbd>Esc</kbd> cancel</span></div>`;
   const ta = wrap.querySelector('textarea');
   ta.value = src;
   if (atEnd) el.preview.appendChild(wrap); else target.replaceWith(wrap);
   block.active = { a, b, ta, src, atEnd };
   autosize(ta);
+  block.lints = spellOn() ? blockLints(ta, wrap.querySelector('.block-lints')) : null;
   ta.focus({ preventScroll: true });
   ta.setSelectionRange(src.length, src.length);
   const s = state.settings;
@@ -326,7 +328,8 @@ export function startBlockEdit(target, atEnd = false) {
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitBlock(); return; }
     if (handleKey(ta, e, { indent: INDENTS[s.indent] || '\t', smartLists: s.smartLists, autoPair: s.autoPair, tables: s.tableKeys })) autosize(ta);
   });
-  ta.addEventListener('blur', () => setTimeout(() => { if (block.active?.ta === ta && document.activeElement !== ta) commitBlock(); }, 150));
+  // A menu opened from the block (a writing suggestion) keeps it open; focus comes back when the menu closes.
+  ta.addEventListener('blur', () => setTimeout(() => { if (block.active?.ta === ta && document.activeElement !== ta && !el.layer.contains(document.activeElement)) commitBlock(); }, 150));
 }
 
 /** Write the edited block back into the note. Returns how many lines it added or removed, and where. */
@@ -334,6 +337,7 @@ export function commitBlock() {
   const b = block.active;
   if (!b) return null;
   block.active = null;
+  block.lints = null;
   const text = b.ta.value.replace(/\s+$/, '');
   let delta = 0;
   if (text !== b.src.replace(/\s+$/, '')) {
@@ -357,6 +361,7 @@ export function commitBlock() {
 
 export function cancelBlock() {
   block.active = null;
+  block.lints = null;
   renderPreview(true);
 }
 

@@ -70,12 +70,17 @@ export function setSetting(path, value) {
 matchMedia('(prefers-color-scheme: light)').addEventListener('change', applySettings);
 
 export let cfgTimer = 0;
+/** Resolves once the last server-setting change has been saved (pages that re-read the config wait for it). */
+export let cfgSaved = Promise.resolve();
+let cfgDone = null;
 export function setConfig(path, value) {
   setPath(state.config, path, value);
   clearTimeout(cfgTimer);
+  if (!cfgDone) cfgSaved = new Promise((r) => { cfgDone = r; });
   cfgTimer = setTimeout(async () => {
     try { state.config = await api('PUT', '/api/config', state.config); refreshTree(); }
     catch (e) { toast(e.message, 'err'); }
+    const done = cfgDone; cfgDone = null; done();
   }, 350);
 }
 
