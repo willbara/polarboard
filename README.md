@@ -306,3 +306,7 @@ tests/                 end-to-end tests (see tests/README.md)
 ## Credits
 
 Polarboard bundles [Harper](https://github.com/Automattic/harper), [highlight.js](https://highlightjs.org), [KaTeX](https://katex.org) and [Mermaid](https://mermaid.js.org). Their licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## License
+
+Polarboard is free software under the [GNU Affero General Public License v3.0](LICENSE). You can use, change and share it. If you change it and let other people use your version over a network, you must offer them its source code under the same license.

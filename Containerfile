@@ -4,7 +4,7 @@ FROM docker.io/library/python:3.13-alpine
 RUN apk add --no-cache git openssh-client
 
 WORKDIR /app
-COPY server.py ./
+COPY server.py LICENSE THIRD_PARTY_NOTICES.md ./
 COPY static ./static
 # The notes a fresh install starts with (a tour of every feature). Delete them any time.
 COPY examples ./examples
