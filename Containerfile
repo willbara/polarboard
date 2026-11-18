@@ -6,6 +6,8 @@ RUN apk add --no-cache git openssh-client
 WORKDIR /app
 COPY server.py ./
 COPY static ./static
+# The notes a fresh install starts with (a tour of every feature). Delete them any time.
+COPY examples ./examples
 
 # /data holds the first account's notes (/data/vault), added accounts (/data/vaults),
 # and the account list, sessions and share links (/data/.polarboard-server).

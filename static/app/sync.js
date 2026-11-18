@@ -1,7 +1,7 @@
 import { idb } from '../offline.js';
 import { $, CLIENT, VAULT, api, debounce, dirname, enc, setOnline, state, stem, vstore } from './core.js';
 import { backlinksSoon } from './panels.js';
-import { loadWords, scheduleLint, spell } from './spellui.js';
+import { configureSpell, scheduleLint } from './spellui.js';
 import { patchTreeNote, refreshTree } from './tree.js';
 import { dialog, toast } from './ui.js';
 import { setEditorValue, updateStatus } from './writing.js';
@@ -178,7 +178,7 @@ export function connectLive() {
     let ev;
     try { ev = JSON.parse(m.data); } catch { return; }
     if (ev.client === CLIENT) return;
-    if (ev.type === 'dictionary') { loadWords().then((words) => spell.configure({ dialect: state.settings.dialect, rules: state.settings.harperRules, words })).then(() => scheduleLint(0)).catch(() => {}); return; }
+    if (ev.type === 'dictionary') { configureSpell().then(() => scheduleLint(0)).catch(() => {}); return; }
     liveRefresh();
   };
   live.onerror = () => { if (live?.readyState === EventSource.CLOSED) setTimeout(connectLive, 5000); };

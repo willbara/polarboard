@@ -35,6 +35,7 @@ class Server:
         self.url = f"http://127.0.0.1:{self.port}"
         self.vault = self.dir / "vault"
         env = {**os.environ, "POLARBOARD_DATA": str(self.dir), "POLARBOARD_PORT": str(self.port),
+               "POLARBOARD_EXAMPLES": str(ROOT / "tests" / "seed"),  # a small, fixed starter set the tests rely on
                "POLARBOARD_HOST": "127.0.0.1", **(env or {})}
         self.log = open(self.dir / "server.log", "w")
         self.proc = subprocess.Popen([sys.executable, str(ROOT / "server.py")], env=env, stdout=self.log, stderr=subprocess.STDOUT)

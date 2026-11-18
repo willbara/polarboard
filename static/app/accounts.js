@@ -13,7 +13,7 @@ export const currentAccount = () => accounts.list.find((a) => a.id === VAULT) ||
 export function avatar(a, cls = '') {
   const ic = a?.icon || {};
   if (ic.type === 'image') return `<span class="avatar ${cls}"><img src="/api/account-icon?id=${enc(a.id)}&v=${ic.v}" alt=""></span>`;
-  const glyph = !ic.name ? 'feather' : ic.name === 'snowflake' ? 'logo' : ic.name;
+  const glyph = !ic.name ? 'feather' : ic.name;
   return `<span class="avatar ${cls}" style="--ah:${ic.hue ?? 212}">${icon(glyph)}</span>`;
 }
 

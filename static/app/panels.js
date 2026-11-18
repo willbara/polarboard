@@ -12,13 +12,14 @@ import { byName, noteMenu, renderTree, toggleStar } from './tree.js';
 import { commandPalette, menu, quickSwitcher } from './ui.js';
 import { addProperties, block } from './writing.js';
 import { comboLabel, edit, keyFor } from './commands.js';
+import { archiveItem, renderBins } from './bins.js';
 
 // ------------------------------------------------------------------ panels
 export function showPanel(name, reveal = false) {
   state.panel = name;
   store.set('panel', name);
   $$('.panel').forEach((p) => { p.hidden = p.dataset.panel !== name; });
-  $$('.ptab[data-panel]').forEach((b) => b.classList.toggle('active', b.dataset.panel === name));
+  $$('.ptab[data-panel], .rail-btn[data-panel]').forEach((b) => b.classList.toggle('active', b.dataset.panel === name));
   if (reveal && el.app.classList.contains('sb-collapsed')) toggleSidebar(true);
   if (reveal && el.app.classList.contains('focus')) setFocus(false);
   if (mobile.matches && reveal) openDrawer();
@@ -27,8 +28,14 @@ export function showPanel(name, reveal = false) {
   if (name === 'starred') renderStarred();
   if (name === 'outline') renderOutline();
   if (name === 'links') renderBacklinks();
+  if (name === 'trash' || name === 'archive') renderBins(true);
 }
 $$('.ptab[data-panel]').forEach((b) => b.addEventListener('click', () => showPanel(b.dataset.panel)));
+// The bin and the archive box in the rail: a second click goes back to the notes.
+$$('.rail-btn[data-panel]').forEach((b) => b.addEventListener('click', () => {
+  const open = state.panel === b.dataset.panel && !el.app.classList.contains('sb-collapsed');
+  showPanel(open && !mobile.matches ? 'files' : b.dataset.panel, true);
+}));
 $('#railSwitch').addEventListener('click', () => quickSwitcher());
 $('#railDaily').addEventListener('click', () => openDaily());
 $('#railPalette').addEventListener('click', () => commandPalette());
@@ -164,6 +171,7 @@ $('#noteMenuBtn').addEventListener('click', (e) => {
     { icon: 'copy', label: 'Copy markdown', run: () => copyText(cur.content) },
     { icon: 'download', label: 'Export (PDF, HTML, Markdown)…', run: () => exportDialog(cur.path) },
     '-',
+    { icon: 'archive', label: 'Archive', run: () => archiveItem(cur.path) },
     { icon: 'trash', label: 'Delete', danger: true, run: () => deleteNote(cur.path) },
   ]);
 });

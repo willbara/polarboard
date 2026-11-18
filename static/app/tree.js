@@ -1,7 +1,7 @@
 import { esc } from '../markdown.js';
 import { icon } from '../icons.js';
 import { idb } from '../offline.js';
-import { $, $$, SORTS, VAULT, api, basename, copyText, dirname, el, enc, folderMeta, join, mobile, noteByPath, state, stem, vstore } from './core.js';
+import { $, $$, ICON_COLORS, SORTS, VAULT, api, basename, copyText, dirname, el, enc, folderColor, folderMeta, join, mobile, noteByPath, noteColor, state, stem, vstore } from './core.js';
 import { attachNoteDialog, attachToFolder, deleteFolder, deleteNote, download, duplicateNote, exportDialog, moveNoteDialog, newFolder, newNote, openHistory, renameFolder, renameNote, shareDialog, tagsDialog } from './notes.js';
 import { plain, renderStarred, renderTags } from './panels.js';
 import { cacheNote, flushSave, manual, pending, savingP, setSync } from './sync.js';
@@ -10,6 +10,7 @@ import { menu, toast } from './ui.js';
 import { block, setEditorValue, updateStatus } from './writing.js';
 import { edit } from './commands.js';
 import { openSide, refreshSide } from './side.js';
+import { archiveItem, renderBins } from './bins.js';
 
 // ------------------------------------------------------------------ tree
 /**
@@ -43,6 +44,7 @@ export async function refreshTree({ poll = false } = {}) {
   renderTags();
   renderStarred();
   renderRecent();
+  renderBins();
   refreshSide();
   if (state.cur) renderNoteTags();
   checkRemoteChange();
@@ -137,23 +139,32 @@ export function renderTree() {
     const order = folderMeta(node.path).sort || state.settings.sort;
     const sorter = SORTERS[order] || SORTERS.name;
     const ownNote = node.path ? folderMeta(node.path).note : null;
-    let html = '';
+    const pinned = (x) => (x.name !== undefined ? !!folderMeta(x.path).pinned : !!x.pinned);
     const folders = [...node.folders.values()].sort((a, b) => (order === 'name-desc' ? byName(b.name, a.name) : byName(a.name, b.name)));
-    for (const f of folders) {
+    const notes = node.notes.filter((n) => n.path !== ownNote).sort(sorter);
+    // Pinned folders and notes first, then the other folders, then the other notes.
+    const rows = [...folders.filter(pinned), ...notes.filter(pinned), ...folders.filter((f) => !pinned(f)), ...notes.filter((n) => !pinned(n))];
+    let html = '';
+    for (const x of rows) html += x.name !== undefined ? folderRow(x) : noteRow(x);
+    return html;
+
+    function folderRow(f) {
       const open = state.open.has(f.path);
       const fnote = folderMeta(f.path).note;
       const hasNote = fnote && known.has(fnote);
-      html += `<div class="row folder${open ? ' open' : ''}${state.folder === f.path ? ' sel' : ''}${hasNote ? ' has-note' : ''}" data-folder="${esc(f.path)}"${hasNote ? ` data-fnote="${esc(fnote)}"` : ''} style="--d:${d}" draggable="true" role="treeitem" aria-level="${d + 1}" aria-expanded="${open}" tabindex="-1" title="${countNotes(f)} notes${hasNote ? ' · click opens its note' : ''}">
-        ${icon(open ? 'folderOpen' : 'folder')}<span class="name">${esc(f.name)}</span>
-        <button class="more" data-more title="More" tabindex="-1" aria-label="More for ${esc(f.name)}">${icon('more')}</button></div>`;
-      if (open) html += walk(f, d + 1);
+      const pin = pinned(f);
+      const color = folderColor(f.path);
+      return `<div class="row folder${open ? ' open' : ''}${state.folder === f.path ? ' sel' : ''}${hasNote ? ' has-note' : ''}" data-folder="${esc(f.path)}"${hasNote ? ` data-fnote="${esc(fnote)}"` : ''} style="--d:${d}${color ? `;--ic:var(--ic-${color})` : ''}" draggable="true" role="treeitem" aria-level="${d + 1}" aria-expanded="${open}" tabindex="-1"${pin ? ' aria-description="pinned"' : ''} title="${countNotes(f)} notes${hasNote ? ' · click opens its note' : ''}">
+        ${icon(open ? 'folderOpen' : 'folder')}<span class="name">${esc(f.name)}</span>${pin ? icon('pin', 'pin') : ''}
+        <button class="more" data-more title="More" tabindex="-1" aria-label="More for ${esc(f.name)}">${icon('more')}</button></div>`
+        + (open ? walk(f, d + 1) : '');
     }
-    const notes = node.notes.filter((n) => n.path !== ownNote).sort((a, b) => (b.pinned - a.pinned) || sorter(a, b));
-    for (const n of notes) {
-      html += `<div class="row note${n.path === curPath ? ' active' : ''}" data-note="${esc(n.path)}" style="--d:${d}" draggable="true" role="treeitem" aria-level="${d + 1}" aria-selected="${n.path === curPath}" tabindex="-1"${n.starred || n.pinned ? ` aria-description="${[n.starred && 'starred', n.pinned && 'pinned'].filter(Boolean).join(', ')}"` : ''}>
+
+    function noteRow(n) {
+      const color = noteColor(n);
+      return `<div class="row note${n.path === curPath ? ' active' : ''}" data-note="${esc(n.path)}" style="--d:${d}${color ? `;--ic:var(--ic-${color})` : ''}" draggable="true" role="treeitem" aria-level="${d + 1}" aria-selected="${n.path === curPath}" tabindex="-1"${n.starred || n.pinned ? ` aria-description="${[n.starred && 'starred', n.pinned && 'pinned'].filter(Boolean).join(', ')}"` : ''}>
         ${icon('file')}<span class="name">${esc(stem(n.path))}</span>${n.starred ? icon('star', 'pin star') : ''}${n.pinned ? icon('pin', 'pin') : ''}<button class="more" data-more title="More" tabindex="-1" aria-label="More for ${esc(stem(n.path))}">${icon('more')}</button></div>`;
     }
-    return html;
   };
   const html = walk(buildTree(), 0);
   const had = el.tree.contains(document.activeElement) ? rowKey(document.activeElement.closest('.row')) : null;
@@ -346,6 +357,7 @@ export function noteMenu(path, anchor) {
     { icon: 'tag', label: 'Tags…', run: () => tagsDialog(path) },
     { icon: 'star', label: n.starred ? 'Unstar' : 'Star', run: () => toggleStar(path) },
     { icon: 'pin', label: n.pinned ? 'Unpin' : 'Pin to top', run: () => setMeta(path, { pinned: !n.pinned }) },
+    { icon: 'palette', label: 'Color…', run: () => colorMenu(path, anchor) },
     isFolderNote
       ? { icon: 'folder', label: `Detach from “${basename(folder)}”`, run: () => setMeta(folder, { note: null }) }
       : { icon: 'folder', label: 'Attach to folder…', run: () => attachToFolder(path) },
@@ -356,6 +368,7 @@ export function noteMenu(path, anchor) {
     { icon: 'share', label: 'Share link…', run: () => shareDialog(path) },
     { icon: 'download', label: 'Export…', run: () => exportDialog(path) },
     '-',
+    { icon: 'archive', label: 'Archive', run: () => archiveItem(path) },
     { icon: 'trash', label: 'Delete', danger: true, run: () => deleteNote(path) },
   ]);
 }
@@ -373,9 +386,23 @@ export function folderMenu(path, anchor) {
          { icon: 'x', label: 'Detach folder note', run: () => setMeta(path, { note: null }) }]
       : [{ icon: 'paperclip', label: 'Attach a note…', run: () => attachNoteDialog(path) }]),
     { icon: 'tag', label: 'Tags for every note in here…', run: () => tagsDialog(path, true) },
+    { icon: 'pin', label: meta.pinned ? 'Unpin' : 'Pin to top', run: () => setMeta(path, { pinned: !meta.pinned }) },
+    { icon: 'palette', label: 'Color…', run: () => colorMenu(path, anchor, true) },
     '-',
     { icon: 'edit', label: 'Rename', run: () => renameFolder(path) },
+    { icon: 'archive', label: 'Archive folder', run: () => archiveItem(path) },
     { icon: 'trash', label: 'Delete folder', danger: true, run: () => deleteFolder(path) },
+  ]);
+}
+
+/** Pick an icon color for a note or folder. Without one, it takes its folder's color. */
+export function colorMenu(path, anchor, folder = false) {
+  const own = folder ? folderMeta(path).color : noteByPath(path)?.color;
+  const inherited = folderColor(dirname(path));
+  menu(anchor, [
+    { header: folder ? 'Folder color' : 'Note color' },
+    { swatch: inherited ? `var(--ic-${inherited})` : 'var(--text-3)', label: inherited ? 'Same as its folder' : 'None', on: !own, run: () => setMeta(path, { color: null }) },
+    ...ICON_COLORS.map(([k, label]) => ({ swatch: `var(--ic-${k})`, label, on: own === k, run: () => setMeta(path, { color: k }) })),
   ]);
 }
 

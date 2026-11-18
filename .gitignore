@@ -1,6 +1,7 @@
 vault/
 vaults/
 data/
+backups/
 .polarboard-server/
 __pycache__/
 *.pyc

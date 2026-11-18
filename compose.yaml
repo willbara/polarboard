@@ -21,4 +21,11 @@ services:
       POLARBOARD_PASSWORD: ""
       # Where scheduled backups go (default /data/backups). Turn them on in Settings → Sync.
       # POLARBOARD_BACKUPS: /backups
+      # Wrong passwords allowed per account in 10 minutes (0 turns the limit off).
+      # POLARBOARD_LOGIN_TRIES: "8"
     restart: unless-stopped
+    # Here as well as in the Containerfile: Podman ignores a Containerfile HEALTHCHECK in its default image format.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 3s

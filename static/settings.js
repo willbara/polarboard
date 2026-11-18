@@ -85,6 +85,15 @@ function bindControls(body, ctx, rerender) {
 }
 
 const pct = (v) => `${Math.round(v * 100)}%`;
+/** A CSS color (like var(--fmt-h1)) as #rrggbb, for a color picker's starting value. */
+function cssHex(color) {
+  const probe = document.createElement('span');
+  probe.style.color = color;
+  document.body.appendChild(probe);
+  const [r, g, b] = (getComputedStyle(probe).color.match(/[\d.]+/g) || [0, 0, 0]).map(Number);
+  probe.remove();
+  return '#' + [r, g, b].map((n) => Math.round(n).toString(16).padStart(2, '0')).join('');
+}
 const notesOpts = (ctx) => ctx.state.tree.notes.map((n) => [n.path, n.path.replace(/\.md$/i, '')]);
 const folderOpts = (ctx) => ctx.state.tree.folders.map((f) => [f, f]);
 
@@ -139,7 +148,7 @@ const PAGES = {
         </div>
         <div class="pref stack"><div class="pref-label"><span>Picture</span><small>Pick a symbol and a color, or upload your own picture.</small></div>
           <div class="pref-ctl">
-            <div class="glyph-grid">${glyphs.map((g) => `<button class="glyph${ic.type !== 'image' && (ic.name || 'feather') === g ? ' active' : ''}" data-glyph="${g}" title="${g}" style="--ah:${ic.hue ?? 212}">${icon(g === 'snowflake' ? 'logo' : g)}</button>`).join('')}</div>
+            <div class="glyph-grid">${glyphs.map((g) => `<button class="glyph${ic.type !== 'image' && (ic.name || 'feather') === g ? ' active' : ''}" data-glyph="${g}" title="${g}" style="--ah:${ic.hue ?? 212}">${icon(g)}</button>`).join('')}</div>
             <div class="swatches" style="margin-top:10px">${hues.map((h) => `<button class="swatch${ic.type !== 'image' && (ic.hue ?? 212) === h ? ' active' : ''}" style="--h:${h};--s:55%" data-ahue="${h}" title="Color"></button>`).join('')}</div>
             <div style="display:flex;gap:8px;margin-top:12px">${btn('upload-picture', 'Upload picture…', 'outline')}${ic.type === 'image' ? btn('remove-picture', 'Use a symbol instead', 'ghost') : ''}</div>
           </div></div>
@@ -154,7 +163,7 @@ const PAGES = {
         + (s.startup === 'note' ? row('Note to open', '', select(s, 'startupNote', [['', 'Choose a note…'], ...notesOpts(ctx)])) : ''))
       + group('Deleting',
         row('Ask before deleting', 'A confirmation before notes or folders are removed.', toggle(s, 'confirmDelete'))
-        + row('Deleted notes go to', 'Notes in the trash can be restored from Sync.', seg(s, 'deleteMode', [['trash', 'Trash'], ['permanent', 'Delete for good']])))
+        + row('Deleted notes go to', 'Notes in the trash (the bin in the left rail) can be restored.', seg(s, 'deleteMode', [['trash', 'Trash'], ['permanent', 'Delete for good']])))
       + group('This browser',
         row('Export settings', 'Save these settings as a file to copy them to another device.', btn('export', 'Export'))
         + row('Import settings', '', btn('import', 'Import…'))
@@ -255,12 +264,27 @@ const PAGES = {
         + row('Custom hue', '', range(s, 'hue', 0, 359, 1, (v) => `${v}°`))
         + row('Saturation', 'Turn it all the way down for a silver accent.', range(s, 'accentSat', 0, 100, 1, (v) => `${v}%`))
         + row('Glow', 'How much light the accent gives off.', range(s, 'glow', 0, 1, 0.05, pct)))
+      + group('Text colors',
+        row('Color formatting', 'Headings, bold, italics, links and the rest each get a color, while you write and in the preview. Unless you pick one, each is a shade of the accent.', toggle(s, 'fmtColors'))
+        + (s.fmtColors ? `<div class="fmt-grid">${ctx.FORMATS.map(([k, label, style]) => {
+          const mine = /^#[0-9a-f]{6}$/i.test(s.fmt[k] || '');
+          return `<div class="fmt-pick">
+            <label class="fmt-swatch" style="background:var(--fmt-${k})" title="Pick a color for ${label.toLowerCase()}"><input type="color" data-fmt="${k}" value="${mine ? s.fmt[k] : cssHex(`var(--fmt-${k})`)}" aria-label="${label} color"></label>
+            <span class="fmt-sample" style="${k === 'mark' ? 'background:var(--fmt-mark);border-radius:3px;padding:0 .2em' : `color:var(--fmt-${k});${style}`}">${label}</span>
+            ${mine ? `<button class="icon-btn sm" data-fmt-reset="${k}" title="Back to the accent shade" aria-label="Reset ${label}">${icon('x')}</button>` : '<small>accent</small>'}</div>`;
+        }).join('')}</div>${Object.values(s.fmt).some(Boolean) ? btn('reset-fmt', 'Back to accent shades', 'ghost') : ''}` : ''))
       + group('Texture',
         row('Film grain', '', range(s, 'grain', 0, 1, 0.02, pct))
         + row('Animate grain', 'Moves like film. Stays still when your system asks for reduced motion.', toggle(s, 'grainAnim')));
   },
   mountAppearance(body, ctx, rerender) {
+    // Colors apply live while the picker is open; the page redraws once it closes.
+    body.addEventListener('input', (e) => { if (e.target.dataset.fmt) ctx.setSetting(`fmt.${e.target.dataset.fmt}`, e.target.value); });
+    body.addEventListener('change', (e) => { if (e.target.dataset.fmt) rerender(); });
     body.addEventListener('click', (e) => {
+      const reset = e.target.closest('[data-fmt-reset]');
+      if (reset) { ctx.setSetting(`fmt.${reset.dataset.fmtReset}`, ''); rerender(); return; }
+      if (e.target.closest('[data-act="reset-fmt"]')) { ctx.setSetting('fmt', {}); rerender(); return; }
       const sw = e.target.closest('[data-accent]');
       if (!sw) return;
       const [h, sat] = sw.dataset.accent.split(',').map(Number);
@@ -296,7 +320,9 @@ const PAGES = {
 
   async editor(ctx) {
     const s = ctx.state.settings;
-    const words = s.spellEngine === 'harper' ? (await ctx.api('GET', '/api/dictionary').catch(() => ({ words: [] }))).words : [];
+    const dict = s.spellEngine === 'harper' ? await ctx.api('GET', '/api/dictionary').catch(() => ({ words: [], ignored: [] })) : { words: [], ignored: [] };
+    const words = dict.words;
+    const ignored = (dict.ignored || []).length;
     const engines = { harper: 'Harper checks spelling, grammar, punctuation and style as you write. It runs entirely in this browser; nothing is sent anywhere.', browser: 'Your browser’s built-in spellcheck. Spelling only, and it also flags #tags and links.', off: 'No underlines.' };
     const groups = Object.entries(ctx.GROUPS).map(([key, g]) => row(g.label, '', toggle(s, `spellGroups.${key}`))).join('');
     return group('Text',
@@ -309,6 +335,8 @@ const PAGES = {
         row('Checker', engines[s.spellEngine] || '', seg(s, 'spellEngine', [['harper', 'Harper'], ['browser', 'Browser'], ['off', 'Off']]))
         + (s.spellEngine === 'harper' ? row('English', '', select(s, 'dialect', [['American', 'American'], ['British', 'British'], ['Canadian', 'Canadian'], ['Australian', 'Australian'], ['Indian', 'Indian']]))
           + groups
+          + row('Skip text that isn’t English', 'Leaves passages in other languages alone. A sentence with many typos can look foreign too, so it may miss a few. To turn checks off for one note, give it the property spellcheck: false.', toggle(s, 'spellIsolate'))
+          + row('Ignored suggestions', ignored ? `${ignored} ignored with “Ignore here”, on every device` : 'None yet. Right-click an underline and choose Ignore here.', ignored ? btn('clear-ignored', 'Show them again', 'ghost') : '')
           + `<div class="pref stack"><div class="pref-label"><span>Personal dictionary</span><small>Words Harper should accept. Shared by every device using this vault. Right-click an underlined word to add it quickly.</small></div>
               <div class="pref-ctl"><div class="note-tags" style="margin:0">${words.map((w) => `<span class="ntag">${esc(w)}<button data-unword="${esc(w)}" title="Remove">${icon('x')}</button></span>`).join('') || '<span class="ntag">No words yet</span>'}</div>
               <div class="form inline" style="margin:8px 0 0"><input class="txt" data-f="word" placeholder="Add a word">${btn('add-word', 'Add', 'outline')}</div></div></div>`
@@ -369,6 +397,12 @@ const PAGES = {
           const w = body.querySelector('[data-f="word"]').value.trim();
           if (!w) return;
           await ctx.api('PUT', '/api/dictionary', { add: w });
+          await ctx.startSpell();
+          rerender();
+        }
+        if (b.dataset.act === 'clear-ignored') {
+          await ctx.api('PUT', '/api/dictionary', { ignored: [] });
+          for (const k of ['ignored', 'ignoredUnsent']) localStorage.removeItem(`pb:${ctx.VAULT}:${k}`);
           await ctx.startSpell();
           rerender();
         }
@@ -592,9 +626,8 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
   async sync(ctx) {
     const s = ctx.state.settings;
     await ctx.configSaved();
-    const [info, trash, config, git, cached, backups] = await Promise.all([
+    const [info, config, git, cached, backups] = await Promise.all([
       ctx.api('GET', '/api/info').catch(() => null),
-      ctx.api('GET', '/api/trash').catch(() => ({ items: [] })),
       ctx.api('GET', '/api/config').catch(() => ctx.state.config),
       ctx.api('GET', '/api/git').catch(() => null),
       ctx.idb.keys(`${ctx.VAULT}|note|`),
@@ -614,9 +647,6 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
     </div>`;
     const waiting = local.length ? `<div class="items">${local.map(([p, v]) => `<div class="item">${icon('file')}<div class="grow"><b>${esc(ctx.stem(p))}</b><small>Edited ${ctx.relTime(v.at)}${v.base ? '' : ' · new note'}</small></div></div>`).join('')}</div>
       <div style="display:flex;gap:8px;margin-bottom:8px">${btn('push', 'Sync now', 'primary')}${btn('discard', 'Discard these edits', 'danger-outline')}</div>` : '';
-    const trashList = trash.items.length
-      ? `<div class="items">${trash.items.slice(0, 50).map((t) => `<div class="item">${icon(t.dir ? 'folder' : 'file')}<div class="grow"><b>${esc(t.from.replace(/\.md$/i, ''))}</b><small>Deleted ${ctx.relTime(t.deleted)} · ${ctx.fmtBytes(t.size)}${t.dir ? ` · ${t.files} files` : ''}</small></div>${btn('restore', 'Restore', 'outline', `data-id="${esc(t.id)}"`)}${btn('purge', 'Delete', 'ghost', `data-id="${esc(t.id)}"`)}</div>`).join('')}</div>`
-      : '<div class="items"><div class="item-empty">The trash is empty.</div></div>';
     const g = c.git || {};
     const gitBody = !git ? '<div class="item-empty">Git status is unavailable while offline.</div>'
       : !git.available ? '<div class="item-empty">git isn’t installed on the server. Install it (the container image includes it) to use this.</div>'
@@ -648,8 +678,8 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
         + row('Stored history', info ? `${info.history.versions.toLocaleString()} versions using ${ctx.fmtBytes(info.history.bytes)}` : '',
           (ctx.state.cur ? btn('note-history', 'This note’s history', 'outline') : '') + btn('clear-history', 'Clear all', 'danger-outline')))
       + group('Git', gitBody, 'An optional extra on top of version history: a real git repository in the vault folder, committed on a schedule.')
-      + group('Trash', row('Empty the trash automatically after', '', select(c, 'trashDays', [[0, 'Never'], [7, '1 week'], [30, '30 days'], [90, '90 days'], [365, '1 year']], 'c'))
-        + trashList + (trash.items.length ? btn('empty-trash', 'Empty trash', 'danger-outline') : ''))
+      + group('Trash', row('Empty the trash automatically after', '', select(c, 'trashDays', [[0, 'Never'], [7, '1 week'], [30, '30 days'], [90, '90 days'], [365, '1 year']], 'c')),
+        'Deleted notes are listed under the bin in the left rail, where you can read, restore or empty them.')
       + group('Backup',
         row('Download a backup', 'A .zip of this vault: every note, folder, attachment and Polarboard’s metadata. Tokens are left out.',
           `<a class="btn sm outline" href="/api/export?vault=${ve}" download>Download .zip</a><a class="btn sm ghost" href="/api/export?vault=${ve}&history=1" download>With history</a>`)
@@ -675,16 +705,9 @@ curl -X POST -H "Authorization: Bearer ${esc(fresh.token)}" \\
           ctx.toast(r.committed ? `Committed ${r.files} file${r.files === 1 ? '' : 's'}` : 'Nothing new to commit');
           rerender();
         }
-        if (act === 'restore') { const r = await ctx.api('POST', '/api/trash/restore', { id: b.dataset.id }); ctx.toast(`Restored to ${r.path}`); await ctx.refreshTree(); rerender(); }
-        if (act === 'purge' && await confirm('Delete this for good?', 'It cannot be restored afterwards.', 'Delete')) {
-          await ctx.api('DELETE', `/api/trash?id=${encodeURIComponent(b.dataset.id)}`); rerender();
-        }
         if (act === 'run-backup') { b.disabled = true; await ctx.api('POST', '/api/backups/run'); ctx.toast('Backup saved'); rerender(); }
         if (act === 'delete-backup' && await confirm('Delete this backup?', 'The .zip is removed from the server.', 'Delete')) {
           await ctx.api('DELETE', `/api/backups?name=${encodeURIComponent(b.dataset.name)}`); rerender();
-        }
-        if (act === 'empty-trash' && await confirm('Empty the trash?', 'Everything in it is deleted for good.', 'Empty trash')) {
-          await ctx.api('DELETE', '/api/trash'); rerender();
         }
       } catch (err) { ctx.toast(err.message, 'err'); rerender(); }
     });

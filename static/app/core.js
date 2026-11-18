@@ -12,6 +12,7 @@ export const DEFAULTS = {
   startup: 'restore', startupNote: '', confirmDelete: true, deleteMode: 'trash',
   // appearance
   theme: 'auto', hue: 218, accentSat: 78, glow: 0.6, grain: 0.22, grainAnim: true,
+  fmtColors: true, fmt: {}, // fmt: { h1: '#rrggbb', … }; a missing color is a shade of the accent
   // interface
   mode: 'write', tabMode: 'replace', showToolbar: true, showArrows: true, showCrumbs: true,
   showFileIcons: true, sort: 'name', focusReveal: true, readingWpm: 230,
@@ -21,7 +22,7 @@ export const DEFAULTS = {
   syntaxColors: true, spellcheck: true, smartLists: true, autoPair: false, typewriter: false, indent: 'tab',
   linkSuggest: true, tagSuggest: true, slashMenu: true, tableKeys: true, previewEdit: true, hoverPreview: true,
   // writing checks (Harper)
-  spellEngine: 'harper', dialect: 'American',
+  spellEngine: 'harper', dialect: 'American', spellIsolate: false,
   spellGroups: { spelling: true, grammar: true, punctuation: true, style: true }, harperRules: {},
   // preview
   richCode: true, richMath: true, richDiagrams: true,
@@ -38,6 +39,23 @@ export const DEFAULTS = {
 };
 export const WIDTHS = { narrow: ['36rem', 'Narrow'], medium: ['44rem', 'Medium'], wide: ['58rem', 'Wide'], full: ['100%', 'Full'] };
 export const ACCENTS = [[218, 78, 'Polar'], [192, 70, 'Glacier'], [162, 55, 'Aurora'], [262, 65, 'Dusk'], [328, 60, 'Rose'], [28, 80, 'Ember'], [80, 50, 'Lichen'], [0, 0, 'Silver']];
+/** Formatting that gets its own color: [key, label, how its sample is styled]. */
+export const FORMATS = [
+  ['h1', 'Heading 1', 'font-weight:680'], ['h2', 'Heading 2', 'font-weight:680'], ['h3', 'Heading 3', 'font-weight:680'],
+  ['h4', 'Heading 4', 'font-weight:680'], ['h5', 'Heading 5', 'font-weight:680'], ['h6', 'Heading 6', 'font-weight:680'],
+  ['b', 'Bold', 'font-weight:680'], ['i', 'Italic', 'font-style:italic'], ['del', 'Strikethrough', 'text-decoration:line-through'],
+  ['mark', 'Highlight', ''], ['code', 'Inline code', 'font-family:var(--font-mono)'], ['link', 'Links', ''], ['quote', 'Quotes', ''],
+];
+/** Icon colors for notes and folders: [key, label]. The CSS draws each as --ic-<key>, for both themes. */
+export const ICON_COLORS = [['red', 'Red'], ['orange', 'Orange'], ['yellow', 'Yellow'], ['green', 'Green'], ['teal', 'Teal'],
+  ['blue', 'Blue'], ['purple', 'Purple'], ['pink', 'Pink'], ['gray', 'Gray'], ['accent', 'Accent']];
+/** A folder's icon color: its own, or the nearest folder above it that has one. */
+export function folderColor(path) {
+  for (let p = path; p; p = p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '') if (folderMeta(p).color) return folderMeta(p).color;
+  return null;
+}
+/** A note's icon color: its own, or its folder's. */
+export const noteColor = (n) => n.color || folderColor(n.path.includes('/') ? n.path.slice(0, n.path.lastIndexOf('/')) : '');
 export const SORTS = [['name', 'Name (A to Z)'], ['name-desc', 'Name (Z to A)'], ['modified', 'Edited (newest first)'], ['modified-asc', 'Edited (oldest first)'], ['created', 'Created (newest first)'], ['created-asc', 'Created (oldest first)']];
 
 export const store = {
@@ -52,6 +70,7 @@ export function mergeSettings(saved = {}) {
     spellGroups: { ...DEFAULTS.spellGroups, ...(saved.spellGroups || {}) },
     harperRules: { ...(saved.harperRules || {}) },
     hotkeys: { ...(saved.hotkeys || {}) },
+    fmt: { ...(saved.fmt || {}) },
   };
 }
 

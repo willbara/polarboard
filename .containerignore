@@ -1,6 +1,9 @@
 vault
 vaults
 data
+backups
 .polarboard-server
 .git
 __pycache__
+tests
+docs

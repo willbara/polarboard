@@ -230,7 +230,8 @@ function renderItem(it, o) {
 }
 
 function safeUrl(u, image = false) {
-  const raw = u.replace(/^&lt;|&gt;$/g, '').trim();
+  // Browsers drop control characters from URLs, so "\x01javascript:" would slip past the check below.
+  const raw = u.replace(/^&lt;|&gt;$/g, '').replace(/[\x00-\x1f\x7f]/g, '').trim();
   if (/^(https?:|mailto:|tel:|#)/i.test(raw) || !/^[\w+.-]*:/.test(raw)) return raw;
   if (image && /^data:image\/(png|jpe?g|gif|webp|avif);/i.test(raw)) return raw;
   return '#';

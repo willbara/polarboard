@@ -9,6 +9,7 @@ Layout on disk (DATA defaults to the folder this file is in):
   DATA/vaults/<id>/            accounts created from the app (each account is a vault)
   DATA/.polarboard-server/     account list, sessions, share links, account pictures
   <vault>/.polarboard/         per-vault data: dates, tags, history, tokens
+  <vault>/.trash/, .archive/   deleted and archived notes, each where they were in the vault
 """
 
 import base64
@@ -23,9 +24,11 @@ import queue
 import re
 import secrets
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -33,7 +36,7 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 STARTED = time.time()
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -43,6 +46,9 @@ HOST = os.environ.get("POLARBOARD_HOST", "0.0.0.0")
 PORT = int(os.environ.get("POLARBOARD_PORT", "8787"))
 # Optional "server password": when set, it is required to create or delete accounts.
 ENV_PASSWORD = os.environ.get("POLARBOARD_PASSWORD", "")
+# Wrong passwords allowed per account within the window (minutes) before it waits. 0 turns the limit off.
+LOGIN_TRIES = int(os.environ.get("POLARBOARD_LOGIN_TRIES", "8"))
+LOGIN_WINDOW = int(os.environ.get("POLARBOARD_LOGIN_WINDOW", "10")) * 60
 
 SERVER_DIR = DATA / ".polarboard-server"
 REGISTRY_FILE = SERVER_DIR / "server.json"
@@ -55,6 +61,8 @@ MAX_UPLOAD = 25 * 1024 * 1024
 SESSION_DAYS = 30
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".avif", ".bmp"}
 SORTS = {"name", "name-desc", "modified", "modified-asc", "created", "created-asc"}
+# Colors a note's or folder's icon can have (each is drawn to suit the light and dark themes).
+ICON_COLORS = {"red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "gray", "accent"}
 BAD_NAME = re.compile(r'[\\:*?"<>|#^\[\]\x00-\x1f]')
 TAG_RE = re.compile(r"(?<![^\s(\[,;])#([\w/-]+)")
 INLINE_CODE = re.compile(r"`+[^`]*`+")
@@ -65,6 +73,8 @@ DEFAULT_CONFIG = {
     "git": {"enabled": False, "interval": 30, "remote": "", "push": False, "message": "Polarboard: {count} files changed"},
     "backup": {"enabled": False, "every": "daily", "hour": 3, "day": 6, "keep": 7, "history": False},
 }
+# The notes a new, empty first account starts with.
+EXAMPLES = Path(os.environ.get("POLARBOARD_EXAMPLES", "") or ROOT / "examples").resolve()
 # Scheduled backups land in BACKUP_ROOT/<account id>/. Mount a NAS folder here to keep them off the server.
 BACKUP_ROOT = Path(os.environ.get("POLARBOARD_BACKUPS", "") or DATA / "backups").resolve()
 GITIGNORE = "# Added by Polarboard\n.trash/\n.polarboard/history/\n.polarboard/auth.json\n.polarboard/config.json\n.polarboard/trash.json\n.polarboard/search.db*\n*.tmp\n"
@@ -87,12 +97,12 @@ FTS5 = fts5_available()
 PBKDF2_ROUNDS = 240_000
 
 REG_LOCK = threading.RLock()
-REGISTRY: dict = {"vaults": {}, "accounts": {}}
+REGISTRY: dict = {"accounts": {}}
 VAULTS: dict = {}
 SESSIONS: dict = {}
 SHARES: dict = {}
 VERIFIED: dict = {}  # sha(Authorization header) -> user, so PBKDF2 runs once per login
-LOGIN_FAILS: dict = {}
+LOGIN_FAILS: dict = {}  # account id (or "server") -> times of recent wrong passwords
 _last_sessions_save = 0.0
 
 APP_CSP = (
@@ -113,7 +123,7 @@ class ApiError(Exception):
 
 
 class Raw:
-    """A non-JSON response (used for the vault backup download)."""
+    """A non-JSON response: bytes, or an open file that is streamed and then closed (backup zips)."""
     def __init__(self, data, ctype, headers=None):
         self.data, self.ctype, self.headers = data, ctype, headers or {}
 
@@ -145,7 +155,7 @@ def load_json(p, default):
 
 def save_json(p, data, private=False):
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.{threading.get_ident()}.tmp")  # one per thread, so saves can't collide
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True), "utf-8")
     if private:
         os.chmod(tmp, 0o600)
@@ -213,13 +223,13 @@ def extract_tags(text):
     return dedupe(found)
 
 
-def unique_path(p):
+def unique_path(p, sep=" "):
     if not p.exists():
         return p
     stem, suffix = (p.stem, p.suffix) if p.suffix else (p.name, "")
     n = 2
     while True:
-        candidate = p.with_name(f"{stem} {n}{suffix}")
+        candidate = p.with_name(f"{stem}{sep}{n}{suffix}")
         if not candidate.exists():
             return candidate
         n += 1
@@ -265,6 +275,7 @@ class Vault:
         self.id, self.name, self.root = vid, name, Path(root).resolve()
         self.polar = self.root / ".polarboard"
         self.trash = self.root / ".trash"
+        self.archive = self.root / ".archive"  # read-only notes, out of the tree, search and links
         self.history = self.polar / "history"
         self.lock = threading.RLock()
         self.tag_cache = {}
@@ -318,14 +329,16 @@ class Vault:
     def rel(self, p):
         return p.relative_to(self.root).as_posix()
 
-    def resolve(self, rel, note=False):
+    def resolve(self, rel, note=False, base=None):
+        """A path inside the vault, or inside base (the trash or the archive)."""
+        base = base or self.root
         rel = (rel or "").replace("\\", "/").strip().strip("/")
         if not rel or "\x00" in rel:
             raise ApiError(400, "Missing path")
-        p = (self.root / rel).resolve()
-        if p == self.root or self.root not in p.parents:
+        p = (base / rel).resolve()
+        if p == base or base not in p.parents:
             raise ApiError(400, "Path is outside the vault")
-        if any(part.startswith(".") for part in p.relative_to(self.root).parts):
+        if any(part.startswith(".") for part in p.relative_to(base).parts):
             raise ApiError(400, "Hidden paths are not allowed")
         if note and p.suffix.lower() != ".md":
             raise ApiError(400, "Notes must end in .md")
@@ -370,16 +383,6 @@ class Vault:
                     files.append(rel)
         return notes, sorted(folders), sorted(files)
 
-    def files(self):
-        """Non-note files (images, PDFs), wherever they are, for resolving embeds."""
-        out = []
-        for dirpath, dirnames, filenames in os.walk(self.root):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
-            for f in filenames:
-                if not f.startswith(".") and not f.lower().endswith(".md"):
-                    out.append(self.rel(Path(dirpath) / f))
-        return sorted(out)
-
     # -- search index (SQLite FTS5, kept in .polarboard/search.db)
     def index_db(self):
         self.polar.mkdir(parents=True, exist_ok=True)
@@ -421,14 +424,6 @@ class Vault:
             self.index_dirty = False
             self.index_checked = time.time()
 
-    def folders(self):
-        out = []
-        for dirpath, dirnames, _ in os.walk(self.root):
-            here = Path(dirpath)
-            dirnames[:] = [d for d in dirnames if not self.skip_dir(here, d)]
-            out += [self.rel(here / d) for d in dirnames]
-        return sorted(out)
-
     # -- metadata
     def created_ms(self, rel, st):
         entry = self.meta.setdefault(rel, {})
@@ -469,6 +464,7 @@ class Vault:
             "inherited": inherited,
             "pinned": bool(self.meta.get(rel, {}).get("pinned")),
             "starred": self.meta.get(rel, {}).get("starred"),
+            "color": self.meta.get(rel, {}).get("color"),  # its own; the app falls back to its folder's
         }
 
     def meta_move(self, old, new):
@@ -547,8 +543,9 @@ class Vault:
                     self.prune_history(Path(dirpath))
 
     # -- trash
-    def to_trash(self, p):
-        rel = self.rel(p)
+    def to_trash(self, p, rel=None):
+        """rel is where a restore puts it back (an archived note returns to the notes)."""
+        rel = rel or self.rel(p)
         dest = unique_path(self.trash / rel)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(p), str(dest))
@@ -720,15 +717,6 @@ def default_icon(aid):
     return {"type": "glyph", "name": "feather", "hue": 212 if aid == "main" else int(sha(aid)[:8], 16) % 360}
 
 
-def old_default_icon(aid):
-    """What 0.5 and 0.6 assigned, so untouched defaults can move to the feather."""
-    if aid == "main":
-        return {"type": "glyph", "name": "snowflake", "hue": 212}
-    old = ["snowflake", "mountain", "moon", "leaf", "book", "star", "flame", "coffee", "feather", "compass", "wave", "home", "heart", "code"]
-    n = int(sha(aid)[:8], 16)
-    return {"type": "glyph", "name": old[n % len(old)], "hue": n % 360}
-
-
 def clean_icon(icon):
     if isinstance(icon, dict) and icon.get("type") == "glyph" and icon.get("name") in GLYPHS:
         try:
@@ -746,35 +734,19 @@ def account_dir(entry):
 
 def load_registry():
     global REGISTRY, SESSIONS, SHARES
-    reg = load_json(REGISTRY_FILE, {})
-    accounts = reg.get("accounts", {})
-    if "vaults" in reg:  # 0.4.0 kept vaults and users apart; each vault becomes an account
-        users, accounts = accounts, {}
-        for vid, info in reg["vaults"].items():
-            entry = {"name": info.get("name") or vid, "path": info["path"], "created": now_ms(), "icon": default_icon(vid)}
-            owner = next((u for u in users.values() if vid in u.get("vaults", []) and u.get("hash")), None)
-            if owner:
-                entry["password"] = {"salt": owner["salt"], "hash": owner["hash"]}
-            accounts[vid] = entry
+    accounts = load_json(REGISTRY_FILE, {}).get("accounts", {})
     main = accounts.setdefault("main", {"name": "polarboard", "created": now_ms()})
     main["path"] = str(MAIN_VAULT)
-    if main.get("name") in (None, "", "Main"):
-        main["name"] = "polarboard"
+    main["name"] = main.get("name") or "polarboard"
     REGISTRY = {"accounts": accounts}
     for aid, a in accounts.items():
-        if a.get("icon") == old_default_icon(aid):  # never picked by hand, so follow the new default
-            a["icon"] = default_icon(aid)
         a.setdefault("icon", default_icon(aid))
         a.setdefault("created", now_ms())
         VAULTS[aid] = Vault(aid, a["name"], account_dir(a))
-    # Sessions from 0.4.0 belonged to users, which no longer exist.
-    SESSIONS = {k: s for k, s in load_json(SESSIONS_FILE, {}).items() if s.get("accounts")}
+    # Expired sessions are dropped here; identify() already refuses them.
+    SESSIONS = {k: s for k, s in load_json(SESSIONS_FILE, {}).items()
+                if s.get("accounts") and now_ms() - s.get("seen", 0) < SESSION_DAYS * 86_400_000}
     SHARES = load_json(SHARES_FILE, {})
-    v = VAULTS["main"]
-    if v.auth.get("password") and not main.get("password"):  # 0.3 kept one password inside the vault
-        main["password"] = v.auth.pop("password")
-        v.auth.pop("user", None)
-        v.save_auth()
     save_registry()
 
 
@@ -783,7 +755,8 @@ def save_registry():
 
 
 def save_sessions():
-    save_json(SESSIONS_FILE, SESSIONS, private=True)
+    with REG_LOCK:  # a copy, so a session added meanwhile can't break the dump
+        save_json(SESSIONS_FILE, dict(SESSIONS), private=True)
 
 
 def account_public(aid, h=None):
@@ -803,17 +776,26 @@ def check_server_password(pw):
     return not ENV_PASSWORD or hmac.compare_digest(str(pw or "").encode(), ENV_PASSWORD.encode())
 
 
-def throttle(h):
-    ip = h.client_ip()
-    recent = [t for t in LOGIN_FAILS.get(ip, []) if time.time() - t < 600]
-    if len(recent) >= 8:
+def limited(key, check):
+    """Run a password check for an account (or "server"), refusing while it has had
+    LOGIN_TRIES wrong guesses within LOGIN_WINDOW. Keyed by account, not IP, because
+    the client's IP can't be trusted behind (or without) a proxy."""
+    now = time.time()
+    recent = [t for t in LOGIN_FAILS.get(key, []) if now - t < LOGIN_WINDOW]
+    if LOGIN_TRIES and len(recent) >= LOGIN_TRIES:
         raise ApiError(429, "Too many attempts. Wait a few minutes and try again.")
-    return ip, recent
-
-
-def failed(ip, recent):
-    LOGIN_FAILS[ip] = recent + [time.time()]
+    if check():
+        LOGIN_FAILS.pop(key, None)
+        return True
+    LOGIN_FAILS[key] = recent + [now]
     time.sleep(0.4)
+    return False
+
+
+def set_session_cookie(h, token, remember):
+    secure = "; Secure" if h.headers.get("X-Forwarded-Proto") == "https" else ""
+    age = f"; Max-Age={SESSION_DAYS * 86400}" if remember else ""
+    h.extra_headers["Set-Cookie"] = f"pb_session={token}; Path=/; HttpOnly; SameSite=Strict{age}{secure}"
 
 
 def unlock_session(h, aid, remember=True):
@@ -822,11 +804,9 @@ def unlock_session(h, aid, remember=True):
     s = SESSIONS.get(sha(token)) if token else None
     if not s:
         token = secrets.token_urlsafe(32)
-        s = SESSIONS[sha(token)] = {"accounts": [], "created": now_ms(), "seen": now_ms(),
+        s = SESSIONS[sha(token)] = {"accounts": [], "created": now_ms(), "seen": now_ms(), "remember": bool(remember),
                                     "agent": (h.headers.get("User-Agent") or "")[:200], "ip": h.client_ip()}
-        secure = "; Secure" if h.headers.get("X-Forwarded-Proto") == "https" else ""
-        age = f"; Max-Age={SESSION_DAYS * 86400}" if remember else ""
-        h.extra_headers["Set-Cookie"] = f"pb_session={token}; Path=/; HttpOnly; SameSite=Strict{age}{secure}"
+        set_session_cookie(h, token, remember)
     if aid not in s["accounts"]:
         s["accounts"].append(aid)
     h.session_accounts.add(aid)
@@ -863,11 +843,14 @@ def remove_icon_files(aid):
 
 
 def seed(v):
-    if any(True for _ in v.iter_notes()):
+    """An empty first account starts with the starter notes (by default examples/: a tour of every feature).
+    Their tags, stars and folder settings come from the folder's .polarboard/meta.json, and
+    .polarboard/dictionary.json, if there is one, starts the account's personal dictionary."""
+    if any(True for _ in v.iter_notes()) or not EXAMPLES.is_dir():
         return
-    (v.root / "Welcome.md").write_text(WELCOME, "utf-8")
-    (v.root / "Ideas").mkdir(exist_ok=True)
-    (v.root / "Ideas" / "Ideas.md").write_text("A place for loose threads. #ideas\n\n- Things worth keeping\n- \n", "utf-8")
+    shutil.copytree(EXAMPLES, v.root, dirs_exist_ok=True, ignore=shutil.ignore_patterns("meta.json"))  # merged below
+    v.meta.update(load_json(EXAMPLES / ".polarboard" / "meta.json", {}))
+    v.save_meta()
 
 
 # ===================================================================== API
@@ -886,7 +869,7 @@ def api_tree(h, v, q):
             infos = [v.note_info(v.root / rel, st) for rel, st in notes]
             folder_meta = {}
             for f in folders:
-                m = {k: val for k, val in v.meta.get(f, {}).items() if k in ("sort", "note", "tags")}
+                m = {k: val for k, val in v.meta.get(f, {}).items() if k in ("sort", "note", "tags", "pinned", "color")}
                 if m:
                     folder_meta[f] = m
             if v.meta_dirty:  # first sight of a note records when it was created
@@ -1012,8 +995,10 @@ def api_meta(h, v, q):
         entry = v.meta.setdefault(rel, {})
         if "tags" in changes:
             entry["tags"] = clean_tags(changes["tags"])
-        if p.is_file() and "pinned" in changes:
+        if "pinned" in changes:  # notes and folders both pin to the top of their folder
             entry["pinned"] = bool(changes["pinned"])
+        if "color" in changes:  # anything else, like null, goes back to the folder's color
+            entry["color"] = changes["color"] if changes["color"] in ICON_COLORS else None
         if p.is_file() and "starred" in changes:
             entry["starred"] = (entry.get("starred") or now_ms()) if changes["starred"] else None
         if p.is_dir() and "sort" in changes:
@@ -1067,9 +1052,7 @@ def api_upload(h, v, q):
     if not data:
         raise ApiError(400, "Empty upload")
     with v.lock:
-        p = unique_path(v.resolve(v.attach_rel()) / f"{stem}{ext}")
-        if " " in p.name:  # unique_path adds " 2"; keep names link-safe
-            p = p.with_name(p.name.replace(" ", "-"))
+        p = unique_path(v.resolve(v.attach_rel()) / f"{stem}{ext}", sep="-")  # "-2", not " 2": link-safe
         atomic_write(p, data)
     return {"path": v.rel(p), "name": p.name}
 
@@ -1280,21 +1263,21 @@ def api_import(h, v, q):
     return counts
 
 
-REF_MD = re.compile(r"!?\[[^\]]*\]\(\s*<?([^)>\s]+)>?")
+REF_MD = re.compile(r"!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^)\s]+))")  # <path with spaces> or path
 REF_WIKI = re.compile(r"!?\[\[([^\]|#]+)")
 
 
 def api_attachments(h, v, q):
     """Every non-note file, and whether any note still points at it."""
     paths, names = set(), set()
-    for p in v.iter_notes():
+    for p, rel in [*((p, v.rel(p)) for p in v.iter_notes()), *archived_notes(v)]:
         try:
             text = p.read_text("utf-8", errors="replace")
         except OSError:
             continue
-        here = posixpath.dirname(v.rel(p))
+        here = posixpath.dirname(rel)
         for m in REF_MD.finditer(text):
-            target = urllib.parse.unquote(m.group(1)).split("#")[0].split("?")[0]
+            target = urllib.parse.unquote(m.group(1) or m.group(2)).split("#")[0].split("?")[0]
             if re.match(r"^[a-z]+:", target, re.I):
                 continue
             paths.add(posixpath.normpath(target.lstrip("/")))
@@ -1304,7 +1287,7 @@ def api_attachments(h, v, q):
             paths.add(posixpath.normpath(target))
             names.add(posixpath.basename(target).lower())
     files, unused_bytes = [], 0
-    for rel in v.files():
+    for rel in v.scan()[2]:
         size = (v.root / rel).stat().st_size
         used = rel in paths or posixpath.basename(rel).lower() in names
         if not used:
@@ -1426,6 +1409,13 @@ def api_trash_restore(h, v, q):
     return {"path": v.rel(dst)}
 
 
+def api_trash_note(h, v, q):
+    p = v.resolve(q.get("id"), note=True, base=v.trash)
+    if not p.is_file():
+        raise ApiError(404, "Not in trash")
+    return {"content": p.read_text("utf-8", errors="replace")}
+
+
 def api_trash_delete(h, v, q):
     with v.lock:
         if q.get("id"):
@@ -1436,17 +1426,108 @@ def api_trash_delete(h, v, q):
     return {"ok": True}
 
 
+# -- archive: notes kept read-only in .archive/, mirroring where they were.
+# Tags, history and share links move with them (meta_move) and come back on unarchive.
+def archived_notes(v):
+    """(path, path inside the archive) for every archived note."""
+    for dirpath, dirnames, filenames in os.walk(v.archive):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for f in sorted(filenames):
+            if f.lower().endswith(".md") and not f.startswith("."):
+                p = Path(dirpath) / f
+                yield p, p.relative_to(v.archive).as_posix()
+
+
+def api_archive_list(h, v, q):
+    items = []
+    with v.lock:
+        for p, rel in archived_notes(v):
+            st = p.stat()
+            # When it went in: its own stamp, or that of the folder it was archived with.
+            parts = rel.split("/")
+            stamps = (v.meta.get(".archive/" + "/".join(parts[:i]), {}).get("archived") for i in range(len(parts), 0, -1))
+            at = next((t for t in stamps if t), st.st_mtime_ns // 1_000_000)
+            items.append({"path": rel, "archived": at, "modified": st.st_mtime_ns // 1_000_000, "size": st.st_size})
+    return {"items": sorted(items, key=lambda x: -x["archived"])}
+
+
+def api_archive_note(h, v, q):
+    p = v.resolve(q.get("path"), note=True, base=v.archive)
+    if not p.is_file():
+        raise ApiError(404, "Not in the archive")
+    return {"path": q["path"], "content": p.read_text("utf-8", errors="replace"), "modified": p.stat().st_mtime_ns // 1_000_000}
+
+
+def api_archive_add(h, v, q):
+    """Archive a note or a folder."""
+    src = v.resolve(h.json_body().get("path"))
+    with v.lock:
+        if not src.exists():
+            raise ApiError(404, "Not found")
+        rel = v.rel(src)
+        dst = unique_path(v.archive / rel)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, dst)
+        v.meta.setdefault(rel, {})["archived"] = now_ms()
+        v.meta_move(rel, v.rel(dst))
+    v.publish("tree", [rel], h.client_id)
+    return {"path": dst.relative_to(v.archive).as_posix()}
+
+
+def leave_archive(v, src):
+    """Tidy up after something left the archive: drop folders it left empty."""
+    for d in src.parents:
+        if d == v.archive:
+            break
+        try:
+            d.rmdir()
+        except OSError:
+            break
+
+
+def api_archive_restore(h, v, q):
+    """Put an archived note (or folder) back where it was."""
+    src = v.resolve(h.json_body().get("path"), base=v.archive)
+    with v.lock:
+        if not src.exists():
+            raise ApiError(404, "Not in the archive")
+        dst = unique_path(v.root / src.relative_to(v.archive))
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(src, dst)
+        v.meta.get(v.rel(src), {}).pop("archived", None)
+        v.meta_move(v.rel(src), v.rel(dst))
+        leave_archive(v, src)
+    v.publish("tree", [v.rel(dst)], h.client_id)
+    return {"path": v.rel(dst)}
+
+
+def api_archive_delete(h, v, q):
+    """Move an archived note to the trash. Restoring it from there puts it back with the notes."""
+    src = v.resolve(q.get("path"), base=v.archive)
+    with v.lock:
+        if not src.exists():
+            raise ApiError(404, "Not in the archive")
+        old, rel = v.rel(src), src.relative_to(v.archive).as_posix()
+        hist = v.history / old
+        if hist.exists() and not (v.history / rel).exists():  # history waits where the restore will look
+            (v.history / rel).parent.mkdir(parents=True, exist_ok=True)
+            os.replace(hist, v.history / rel)
+        v.to_trash(src, rel)
+        v.meta_drop(old)
+        leave_archive(v, src)
+    return {"ok": True}
+
+
 # -- info, config, backup
 def api_info(h, v, q):
     with v.lock:
-        notes = sum(1 for _ in v.iter_notes())
-        folders = len(v.folders())
+        notes, folders, _ = v.scan()
         att = dir_size(v.root / v.attach_rel())
         hist = dir_size(v.history)
         tr = dir_size(v.trash)
     return {
         "version": VERSION, "vault": str(v.root), "vaultName": v.name, "started": int(STARTED * 1000),
-        "notes": notes, "folders": folders,
+        "notes": len(notes), "folders": len(folders),
         "attachments": {"files": att[0], "bytes": att[1]},
         "history": {"versions": hist[0], "bytes": hist[1]},
         "trash": {"files": tr[0], "bytes": tr[1]},
@@ -1500,10 +1581,11 @@ def api_config_put(h, v, q):
         return v.config
 
 
-def make_backup(v, with_history=False):
-    """A zip of the account's notes, attachments and metadata. Secrets and caches are left out."""
-    buf = io.BytesIO()
-    with v.lock, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+def make_backup(v, out, with_history=False):
+    """Zip the account's notes, attachments and metadata into out (a path or file), on disk
+    rather than in memory. Secrets and caches are left out. It doesn't hold the vault lock,
+    so saves carry on; every file is replaced atomically, so each one is zipped whole."""
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for dirpath, dirnames, files in os.walk(v.root):
             here = Path(dirpath)
             dirnames[:] = [d for d in dirnames
@@ -1513,8 +1595,10 @@ def make_backup(v, with_history=False):
                 p = here / f
                 if p == v.polar / "auth.json" or f.endswith(".tmp") or f.startswith("search.db"):  # no secrets; the index rebuilds
                     continue
-                z.write(p, v.rel(p))
-    return buf.getvalue()
+                try:
+                    z.write(p, v.rel(p))
+                except FileNotFoundError:  # deleted while the backup ran
+                    pass
 
 
 def backup_name(v):
@@ -1523,7 +1607,9 @@ def backup_name(v):
 
 
 def api_export(h, v, q):
-    return Raw(make_backup(v, q.get("history") == "1"), "application/zip", {"Content-Disposition": f'attachment; filename="{backup_name(v)}"'})
+    f = tempfile.TemporaryFile()
+    make_backup(v, f, q.get("history") == "1")
+    return Raw(f, "application/zip", {"Content-Disposition": f'attachment; filename="{backup_name(v)}"'})
 
 
 # -- scheduled backups
@@ -1551,7 +1637,12 @@ def run_backup(v):
     d = backup_dir(v)
     d.mkdir(parents=True, exist_ok=True)
     name = f"polarboard-{v.id}-{time.strftime('%Y%m%d-%H%M%S')}.zip"
-    atomic_write(d / name, make_backup(v, bool(cfg.get("history"))))
+    tmp = d / f".{name}.tmp"
+    try:
+        make_backup(v, tmp, bool(cfg.get("history")))
+        os.replace(tmp, d / name)
+    finally:
+        tmp.unlink(missing_ok=True)
     for old in list_backups(v)[max(1, int(cfg.get("keep") or 7)):]:
         (d / old["name"]).unlink(missing_ok=True)
     return name
@@ -1603,7 +1694,7 @@ def backup_path(v, name):
 
 def api_backup_file(h, v, q):
     p = backup_path(v, q.get("name"))
-    return Raw(p.read_bytes(), "application/zip", {"Content-Disposition": f'attachment; filename="{p.name}"'})
+    return Raw(p.open("rb"), "application/zip", {"Content-Disposition": f'attachment; filename="{p.name}"'})
 
 
 def api_backup_delete(h, v, q):
@@ -1616,7 +1707,7 @@ def api_events(h, v, q):
     return Stream()
 
 
-# -- personal dictionary (shared by every device using this vault)
+# -- personal dictionary and ignored suggestions (shared by every device using this vault)
 def clean_words(words):
     out = []
     for w in words if isinstance(words, list) else []:
@@ -1626,21 +1717,36 @@ def clean_words(words):
     return sorted(out, key=str.lower)[:5000]
 
 
+def clean_hashes(hashes):
+    """Ignored writing suggestions, as Harper's context hashes: numbers that say which word in
+    which surroundings, never the text itself. The newest 5000 are kept."""
+    ok = [str(x) for x in (hashes if isinstance(hashes, list) else []) if str(x).isdigit() and len(str(x)) <= 20]
+    return list(dict.fromkeys(ok))[-5000:]
+
+
 def api_dictionary(h, v, q):
-    return {"words": load_json(v.polar / "dictionary.json", {}).get("words", [])}
+    d = load_json(v.polar / "dictionary.json", {})
+    return {"words": d.get("words", []), "ignored": d.get("ignored", [])}
 
 
 def api_dictionary_put(h, v, q):
+    """{add: word} or {words: [...]}, and/or {ignore: hash or [hashes]} (merged in) or {ignored: [...]} (replaces)."""
     body = h.json_body()
     with v.lock:
-        words = load_json(v.polar / "dictionary.json", {}).get("words", [])
+        d = load_json(v.polar / "dictionary.json", {})
+        words, ignored = d.get("words", []), d.get("ignored", [])
         if "add" in body:
             words = clean_words(words + [body["add"]])
-        else:
-            words = clean_words(body.get("words"))
-        save_json(v.polar / "dictionary.json", {"words": words})
+        elif "words" in body:
+            words = clean_words(body["words"])
+        if "ignore" in body:  # one hash, or a device's list of ones it hadn't sent yet
+            add = body["ignore"] if isinstance(body["ignore"], list) else [body["ignore"]]
+            ignored = clean_hashes(ignored + add)
+        elif "ignored" in body:
+            ignored = clean_hashes(body["ignored"])
+        save_json(v.polar / "dictionary.json", {"words": words, "ignored": ignored})
     v.publish("dictionary", [], h.client_id)
-    return {"words": words}
+    return {"words": words, "ignored": ignored}
 
 
 # -- tokens (vault-scoped)
@@ -1721,6 +1827,8 @@ def shared_note(token):
     v = VAULTS.get(info["vault"])
     if not v:
         raise ApiError(404, "This link has expired or was removed")
+    if info["path"].startswith(".archive/"):  # works again once it is unarchived
+        raise ApiError(404, "This note is archived")
     p = v.resolve(info["path"], note=True)
     if not p.is_file():
         raise ApiError(404, "This note no longer exists")
@@ -1742,6 +1850,8 @@ def public_file(h, token, rel):
     _, v, p = shared_note(token)
     content = p.read_text("utf-8", errors="replace")
     f = v.resolve(rel)
+    if f.suffix.lower() not in IMPORT_FILES:  # never another note
+        raise ApiError(404, "Not found")
     if rel not in content and urllib.parse.quote(rel) not in content and f"[[{f.name}" not in content:
         raise ApiError(404, "Not found")
     h.send_file(f, VAULT_CSP, "public, max-age=3600")
@@ -1775,11 +1885,8 @@ def api_unlock(h, q):
     if aid not in REGISTRY["accounts"]:
         raise ApiError(404, "No such account")
     if REGISTRY["accounts"][aid].get("password"):
-        ip, recent = throttle(h)
-        if not check_password(aid, str(body.get("password") or "")):
-            failed(ip, recent)
+        if not limited(aid, lambda: check_password(aid, str(body.get("password") or ""))):
             raise ApiError(403, "That password isn't right")
-        LOGIN_FAILS.pop(ip, None)
         unlock_session(h, aid, body.get("remember", True))
     return account_public(aid, h)
 
@@ -1791,9 +1898,7 @@ def api_lock(h, q):
 
 def api_account_create(h, q):
     body = h.json_body()
-    if not check_server_password(body.get("serverPassword")):
-        ip, recent = throttle(h)
-        failed(ip, recent)
+    if not limited("server", lambda: check_server_password(body.get("serverPassword"))):
         raise ApiError(403, "The server password isn't right")
     name = clean_name(body.get("name") or "", "")[:40]
     if not name:
@@ -1868,11 +1973,8 @@ def api_account_password(h, v, q):
     require_person(h)
     body = h.json_body()
     a = REGISTRY["accounts"][v.id]
-    if a.get("password"):
-        ip, recent = throttle(h)
-        if not check_password(v.id, str(body.get("current") or "")):
-            failed(ip, recent)
-            raise ApiError(403, "Current password isn't right")
+    if a.get("password") and not limited(v.id, lambda: check_password(v.id, str(body.get("current") or ""))):
+        raise ApiError(403, "Current password isn't right")
     with REG_LOCK:
         if body.get("remove"):
             a.pop("password", None)
@@ -1890,9 +1992,9 @@ def api_account_delete(h, v, q):
     body = h.json_body()
     if v.id == "main":
         raise ApiError(400, "The first account can't be deleted, but you can rename it")
-    if REGISTRY["accounts"][v.id].get("password") and not check_password(v.id, str(body.get("password") or "")):
+    if REGISTRY["accounts"][v.id].get("password") and not limited(v.id, lambda: check_password(v.id, str(body.get("password") or ""))):
         raise ApiError(403, "That password isn't right")
-    if not check_server_password(body.get("serverPassword")):
+    if not limited("server", lambda: check_server_password(body.get("serverPassword"))):
         raise ApiError(403, "The server password isn't right")
     with REG_LOCK:
         REGISTRY["accounts"].pop(v.id)
@@ -1954,6 +2056,12 @@ VAULT_ROUTES = {
     ("GET", "/api/trash"): api_trash_list,
     ("POST", "/api/trash/restore"): api_trash_restore,
     ("DELETE", "/api/trash"): api_trash_delete,
+    ("GET", "/api/trash/note"): api_trash_note,
+    ("GET", "/api/archive"): api_archive_list,
+    ("GET", "/api/archive/note"): api_archive_note,
+    ("POST", "/api/archive"): api_archive_add,
+    ("POST", "/api/archive/restore"): api_archive_restore,
+    ("DELETE", "/api/archive"): api_archive_delete,
     ("GET", "/api/info"): api_info,
     ("GET", "/api/config"): api_config_get,
     ("PUT", "/api/config"): api_config_put,
@@ -2010,7 +2118,7 @@ class Handler(BaseHTTPRequestHandler):
     def read_body(self, limit=MAX_NOTE):
         self.body_read = True
         n = int(self.headers.get("Content-Length") or 0)
-        if n > limit:
+        if n < 0 or n > limit:
             self.close_connection = True
             raise ApiError(413, "Too large")
         return self.rfile.read(n) if n else b""
@@ -2036,16 +2144,25 @@ class Handler(BaseHTTPRequestHandler):
         return ""
 
     def send(self, status, data, ctype, headers=None):
+        """data is bytes or an open binary file, which is streamed from the start."""
+        if isinstance(data, bytes):
+            size = len(data)
+        else:
+            size = data.seek(0, 2)
+            data.seek(0)
         self.send_response(status)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(size))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "same-origin")
         for k, v in {**self.extra_headers, **(headers or {})}.items():
             self.send_header(k, v)
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(data)
+            if isinstance(data, bytes):
+                self.wfile.write(data)
+            else:
+                shutil.copyfileobj(data, self.wfile)
 
     def send_json(self, status, obj):
         self.send(status, json.dumps(obj).encode(), "application/json; charset=utf-8", {"Cache-Control": "no-store"})
@@ -2066,7 +2183,8 @@ class Handler(BaseHTTPRequestHandler):
         ctype = TYPES.get(p.suffix.lower()) or mimetypes.guess_type(p.name)[0] or ("text/plain" if p.name in ("LICENSE", "NOTICE") else "application/octet-stream")
         if ctype.startswith("text/") and "charset" not in ctype:
             ctype += "; charset=utf-8"
-        self.send(200, p.read_bytes(), ctype, headers)
+        with p.open("rb") as f:
+            self.send(200, f, ctype, headers)
 
     def static(self, rel):
         p = (STATIC / rel).resolve()
@@ -2102,6 +2220,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.session_accounts = set(s["accounts"])
                 if now_ms() - s.get("seen", 0) > 600_000:
                     s["seen"] = now_ms()
+                    if s.get("remember", True):  # keep the cookie as long-lived as the session
+                        set_session_cookie(self, token, True)
                     save_sessions()
         if header.startswith("Basic "):  # for scripts: curl -u account:password
             key = sha(header)
@@ -2113,7 +2233,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 return
             aid = user if user in REGISTRY["accounts"] else next((k for k, a in REGISTRY["accounts"].items() if a["name"] == user), None)
-            if aid and check_password(aid, pw):
+            # Scripts count wrong passwords separately, so an old cron job can't lock browsers out of signing in.
+            if aid and REGISTRY["accounts"][aid].get("password") and limited(f"basic:{aid}", lambda: check_password(aid, pw)):
                 VERIFIED[key] = self.basic_account = aid
 
     def can_open(self, aid):
@@ -2202,7 +2323,11 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(result, Stream):
             return self.stream(v)
         if isinstance(result, Raw):
-            return self.send(200, result.data, result.ctype, {"Cache-Control": "no-store", **result.headers})
+            try:
+                return self.send(200, result.data, result.ctype, {"Cache-Control": "no-store", **result.headers})
+            finally:
+                if hasattr(result.data, "close"):
+                    result.data.close()
         if isinstance(result, Cached):
             if self.headers.get("If-None-Match") == result.etag:
                 self.send_response(304)
@@ -2242,27 +2367,6 @@ class Handler(BaseHTTPRequestHandler):
             v.subscribers.discard(q)
 
 
-WELCOME = """Polarboard keeps your notes as plain **markdown files** on your own server. Nothing is locked in, so you can open the vault folder in any editor, sync it, or back it up however you like. #welcome #polarboard
-
-## Writing
-
-- Type markdown and the editor shades it as you go
-- Press **Ctrl E** to switch between writing and reading
-- Paste or drop an image into a note to embed it
-- Add hashtags anywhere (like #welcome) and they gather in the tags panel
-- Link notes with double brackets, like [[Ideas]]
-
-## Getting around
-
-- [x] **Ctrl O** jumps to any note, **Ctrl Shift P** runs any command
-- [x] Saves itself while you type, and keeps older versions
-- [ ] Write something
-
-> [!tip] Out of the way
-> The focus button (Ctrl Shift F) hides everything but the page. Point at the top or bottom edge to bring the controls back.
-
-Right-click a note or folder for more: tags, pinning, sorting, sharing, version history. Everything else lives in Settings.
-"""
 
 
 def main():
@@ -2270,6 +2374,9 @@ def main():
     load_registry()
     seed(VAULTS["main"])
     threading.Thread(target=background_loop, daemon=True).start()
+    # In a container the server is process 1, which ignores SIGTERM unless it says otherwise;
+    # without this, every stop or update waits 10 seconds and then kills it.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     server.daemon_threads = True
     locked = sum(1 for a in REGISTRY["accounts"].values() if a.get("password"))

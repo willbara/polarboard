@@ -197,7 +197,7 @@ export async function deleteNote(path) {
   if (state.settings.confirmDelete) {
     const ok = await dialog({
       title: `Delete “${stem(path)}”?`,
-      text: permanent ? 'This deletes the note and its version history for good.' : 'It moves to the trash. You can restore it from Settings → Sync.',
+      text: permanent ? 'This deletes the note and its version history for good.' : 'It moves to the trash (the bin in the left rail), where you can restore it.',
       buttons: [{ label: 'Cancel' }, { label: 'Delete', danger: true, value: true }],
     });
     if (!ok) return;

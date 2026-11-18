@@ -56,7 +56,10 @@ export function menu(anchor, items) {
     const b = document.createElement('button');
     b.setAttribute('role', 'menuitem');
     if (it.danger) b.className = 'danger';
-    b.innerHTML = `${icon(it.icon, it.icon === 'blank' ? 'blank' : '')}<span>${esc(it.label)}</span>`;
+    // it.swatch (a CSS color from our own palette, never user text) draws a color dot instead of an icon;
+    // it.on marks the current choice with a check.
+    b.innerHTML = (it.swatch ? `<span class="menu-swatch" style="--sw:${it.swatch}"></span>` : icon(it.icon, it.icon === 'blank' ? 'blank' : ''))
+      + `<span>${esc(it.label)}</span>${it.on ? icon('check', 'menu-check') : ''}`;
     b.addEventListener('click', () => { closeLayer(); it.run(); });
     m.appendChild(b);
   });

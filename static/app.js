@@ -21,6 +21,7 @@ import './app/find.js';
 import './app/mobile.js';
 import './app/hover.js';
 import './app/side.js';
+import './app/bins.js';
 import { boot } from './app/shell.js';
 
 boot();

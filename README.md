@@ -1,178 +1,308 @@
-# Polarboard
+<p align="center"><img src="static/icon.svg" width="64" alt=""></p>
 
-Quiet markdown notes on your own server.
+<h1 align="center">Polarboard</h1>
 
-Your notes are plain `.md` files in folders. Each account is its own folder of notes (like an Obsidian vault). You can open one in Obsidian, VS Code, or anything else, and back it up or sync it however you like.
+<p align="center"><img src="docs/screenshot-dark.png" alt="Polarboard in dark mode, showing the Welcome note in Read mode" width="900"></p>
 
-## Run it
+Polarboard is a notes app you run yourself. Your notes are ordinary `.md` files in folders, so you can open them in Obsidian, VS Code or any editor, and back them up or sync them however you like. The server is a single Python file with no dependencies; the app runs in any browser, keeps working offline, and installs on your phone.
 
-**Directly** (needs Python 3.10 or newer, nothing to install; `git` is optional):
+## Highlights
+
+- **Write in Markdown**, colored as you type, with a Read mode, a side-by-side Split mode and editing in place.
+- **Links between notes** with `[[wikilinks]]`, backlinks, hover previews, and notes or sections embedded in other notes.
+- **Code, math and diagrams**: highlighted code, KaTeX math and Mermaid diagrams, loaded only when a note uses them.
+- **Fast full-text search** with `tag:`, `path:`, `title:`, `"exact phrases"` and `-exclusions`.
+- **Works offline**: keep reading, editing and creating notes without a connection; changes sync when you're back, and conflicts are yours to settle.
+- **Never lose a word**: version history, a trash, an archive, scheduled backups and optional git.
+- **Writing checks** by [Harper](https://github.com/Automattic/harper): spelling, grammar and style, entirely in your browser.
+- **Several accounts**, each its own set of notes with an optional password, plus API tokens for scripts.
+
+## Quick start
+
+**With Podman or Docker** (recommended):
+
+```sh
+git clone <this repository> polarboard && cd polarboard
+podman compose up -d --build        # or: docker compose up -d --build
+```
+
+**Or directly with Python** 3.10 or newer (nothing to install; `git` is optional):
 
 ```sh
 python3 server.py
-# open http://localhost:8787
 ```
 
-**With Podman or Docker:**
+Then open **http://localhost:8787**. A fresh install starts with a short tour: a set of example notes that each show a feature by using it. Read them, then delete what you don't need.
+
+## Self-hosting
+
+### Put it behind HTTPS
+
+On your home network, `http://server:8787` is fine. Anywhere else, put Polarboard behind a reverse proxy with HTTPS (or reach it over a VPN such as Tailscale). HTTPS also lets the app itself install and open offline.
+
+With [Caddy](https://caddyserver.com), that's the whole configuration:
+
+```caddy
+notes.example.com {
+    reverse_proxy localhost:8787
+}
+```
+
+With nginx, pass the scheme along and allow large uploads (imports can be up to 300 MB):
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8787;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    client_max_body_size 300m;
+}
+```
+
+Live updates use server-sent events; Polarboard already tells nginx not to buffer them.
+
+### Accounts and passwords
+
+Polarboard starts with one account, **polarboard**, with no password, so it opens straight away. Before others can reach it:
+
+- **Give the account a password** in **Settings → General**. Passwords are per account and optional; a device asks for it once and can stay unlocked.
+- **Set `POLARBOARD_PASSWORD`**, a server password needed to add or delete accounts. Without it, anyone who can reach the server can add an account.
+- **Wrong passwords are limited** to 8 per account every 10 minutes (`POLARBOARD_LOGIN_TRIES`, `POLARBOARD_LOGIN_WINDOW`).
+
+An account without a password opens for anyone who can reach the server. Notes are stored as plain files and are not encrypted at rest; encrypt the disk if that matters to you.
+
+### Run it as a service (without containers)
+
+```ini
+# /etc/systemd/system/polarboard.service
+[Unit]
+Description=Polarboard notes
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/polarboard/server.py
+Environment=POLARBOARD_DATA=/var/lib/polarboard
+DynamicUser=yes
+StateDirectory=polarboard
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```sh
-podman compose up -d --build     # or: docker compose up -d --build
+sudo systemctl enable --now polarboard
 ```
 
-Everything is stored in `./data`, next to `compose.yaml`.
+### Back it up
 
-## Configuration
+Everything lives in one folder (`./data` with Compose, `POLARBOARD_DATA` otherwise), as plain files, so any backup tool works. Polarboard can also:
 
-All settings are environment variables:
+- download a `.zip` of an account at any time (**Settings → Sync**),
+- write scheduled backups (hourly, daily or weekly) to `POLARBOARD_BACKUPS`. Mount a NAS folder there (see `compose.yaml`) so a backup survives the server's own disk,
+- commit each account to git on a schedule and push it to a remote.
+
+### Update
+
+```sh
+git pull
+podman compose up -d --build        # or restart python3 server.py
+```
+
+Your notes are untouched; reload the page in the browser to get the new version.
+
+### Configuration
+
+Everything is set with environment variables (in `compose.yaml` for containers):
 
 | Variable | Default | What it does |
-| --- | --- | --- |
+| :--- | :--- | :--- |
 | `POLARBOARD_DATA` | the app folder | Where accounts, their notes and share links are kept |
-| `POLARBOARD_VAULT` | `$POLARBOARD_DATA/vault` | Notes of the first account ("polarboard") |
+| `POLARBOARD_VAULT` | `$POLARBOARD_DATA/vault` | Notes of the first account |
 | `POLARBOARD_PORT` | `8787` | Port to listen on |
-| `POLARBOARD_HOST` | `0.0.0.0` | Address to bind |
-| `POLARBOARD_PASSWORD` | *(empty)* | A server password, required to create or delete accounts |
-| `POLARBOARD_LOG` | *(empty)* | Set to `1` to log every request |
-| `POLARBOARD_BACKUPS` | `$POLARBOARD_DATA/backups` | Where scheduled backups are written, one folder per account. Point it at a NAS or a second disk |
+| `POLARBOARD_HOST` | `0.0.0.0` | Address to listen on (`127.0.0.1` for the proxy only) |
+| `POLARBOARD_PASSWORD` | *(none)* | Server password, needed to add or delete accounts |
+| `POLARBOARD_LOGIN_TRIES` | `8` | Wrong passwords allowed per account before it has to wait. `0` turns the limit off |
+| `POLARBOARD_LOGIN_WINDOW` | `10` | Minutes those wrong passwords are counted over |
+| `POLARBOARD_BACKUPS` | `$POLARBOARD_DATA/backups` | Where scheduled backups go, one folder per account |
+| `POLARBOARD_EXAMPLES` | `examples/` | Starter notes for a new, empty first account. Point it at your own folder, or an empty one for none |
+| `POLARBOARD_LOG` | *(off)* | `1` logs every request |
 
-## Layout on disk
+`/healthz` answers `ok` without logging in, for uptime monitors and container health checks.
+
+### What's on disk
 
 ```
 data/
-  vault/                 notes of the first account
-    Welcome.md
-    attachments/         images you paste or drop into notes
-    .polarboard/         dates, folder/note tags, settings, version history,
-                         personal dictionary, API tokens (auth.json)
-    .trash/              deleted notes and folders, recoverable
-  vaults/<id>/           accounts created in the app, same layout
-  .polarboard-server/    account list, unlocked sessions, share links, account pictures
+  vault/                    the first account's notes, as plain .md files
+    attachments/            images pasted or dropped into notes
+    .trash/                 deleted notes, restorable for 30 days (by default)
+    .archive/               archived notes, read-only, in the folders they came from
+    .polarboard/            dates, tags, stars, settings, history, dictionary, API tokens
+  vaults/<id>/              accounts added in the app, same layout
+  backups/<id>/             scheduled backups
+  .polarboard-server/       account list, password hashes, sessions, share links
 ```
 
-Images are linked with ordinary markdown (`![](attachments/pasted-….png)`), and Obsidian-style `![[image.png]]` embeds and `[[wikilinks]]` work too.
+## Features
 
-## Accounts
+<details>
+<summary><b>Writing</b></summary>
 
-An account *is* a set of notes: its own folders, tags, history, trash, tokens and share links. Polarboard starts with one account called **polarboard**, with no password, so it opens straight away.
+- **Markdown, colored as you type**, with headings, bold, italics, strikethrough, ==highlights==, code, links and quotes each in its own color: shades of your accent by default, or your own picks (**Settings → Appearance → Text colors**).
+- **Read, Write and Split modes** (`Ctrl E`), and **editing in place**: in Read mode, click a paragraph, list or table to edit its Markdown right there.
+- **Slash menu:** type `/` at the start of a line for headings, checklists, tables, callouts, code, math, diagrams, embeds, templates and properties.
+- **Tables that line themselves up:** `Tab` moves between cells, `Enter` adds a row, `Ctrl Shift L` tidies the table.
+- **Callouts** (`> [!tip]`, `[!warning]`, …), **checklists**, smart lists, auto-paired brackets, typewriter scrolling and **focus mode** (`Ctrl Shift F`).
+- **Code, math and diagrams:** highlight.js, KaTeX (`$…$`, `$$…$$`) and Mermaid, each loaded only when a note needs it.
+- **Properties:** front matter shown as a small panel above the note, in the same format Obsidian uses.
+- **Find and replace** (`Ctrl F`, `Ctrl H`) with match case, whole words and regular expressions.
+- **Daily notes** (`Alt D`) and **templates** (`Alt Shift T`) with `{{date}}`, `{{date:dddd D MMMM}}`, `{{time}}`, `{{title}}`, `{{yesterday}}`, `{{tomorrow}}` and `{{cursor}}`.
 
-- **Pictures and names:** pick a symbol and color or upload a picture in **Settings → General → Account**.
-- **Passwords are per account and optional.** An account without one opens for anyone who can reach the server. One with a password asks for it once per device ("keep it unlocked on this device"), and **Lock this account** in the account menu closes it again.
-- **More accounts:** use **Add account** in the account menu (the picture at the bottom of the left rail). With more than one, a new browser starts on an account picker. Set `POLARBOARD_PASSWORD` if you don't want just anyone on your network to be able to add accounts.
+</details>
 
-If Polarboard is reachable from outside your network, put it behind HTTPS (for example Caddy, Traefik, or a Tailscale address).
+<details>
+<summary><b>Writing checks</b></summary>
 
-## API tokens and automations
+[Harper](https://github.com/Automattic/harper) checks spelling, grammar, punctuation and style as you write. It runs as WebAssembly in your browser, so nothing you write leaves your server.
 
-Tokens belong to one account. They can read and write its notes, but can't change the account, its tokens or its shares. Scripts can also use `curl -u <account-id>:<password>`.
+- Right-click an underline for fixes, **Add to dictionary**, **Ignore here** (remembered on every device; only a hash of the spot is stored, never the text), or **Turn off** that rule. `F8` steps through them.
+- Choose your English dialect, which groups to check, and single rules in **Settings → Editor**. The personal dictionary is shared by every device using the account.
+- Give a note the property `spellcheck: false` to skip it, for example one written in another language, or turn on **Skip text that isn't English**.
 
-```sh
-curl -H "Authorization: Bearer pb_…" http://polarboard.lan:8787/api/tree
-curl -H "X-Polarboard: 1" -u work:password -X POST -d '{"path":"Inbox","text":"hi"}' http://polarboard.lan:8787/api/append?vault=work
-curl -X POST -H "Authorization: Bearer pb_…" \
-  -d '{"path": "Inbox", "text": "- remember this"}' http://polarboard.lan:8787/api/append
-```
+</details>
 
-`/healthz` is always open, for uptime monitors.
+<details>
+<summary><b>Linking and organizing</b></summary>
 
-## Writing
+- **`[[Wikilinks]]`** with suggestions as you type, `[[Note|another label]]`, `[[Note#Heading]]`, and ordinary Markdown links. Renaming or moving a note updates the links to it.
+- **Backlinks** and unlinked mentions, **hover previews** of links, and **Open to the side** (`Ctrl Alt O`) to read one note while writing another.
+- **Embeds:** `![[Other note]]` shows a note inside another, `![[Other note#Heading]]` just one section, and `![[image.png|320]]` an image at a set width.
+- **Folders** with their own sort order and their own page (any note can be attached to a folder).
+- **Tags** written as `#tag` or `#nested/tag`, in properties, or given to every note in a folder at once.
+- **Stars** (`Alt S`), pins, tabs, an outline of the open note, and a command palette (`Ctrl Shift P`) for everything.
 
-- **Writing checks** come from [Harper](https://github.com/Automattic/harper): spelling, grammar, punctuation and style, running in your browser. Right-click an underline for fixes, or press `F8` to step through them. Choose which groups to check, your English dialect, single rules and a personal dictionary (shared across devices) in **Settings → Editor**.
-- **`[[` suggests notes and `#` suggests tags** as you type.
-- **Previews** highlight code, render `$math$` and `$$math$$` with KaTeX, and draw ` ```mermaid ` diagrams. Each library loads only when a note uses it.
-- **Daily notes and templates:** `Alt D` opens today's note (folder, name format and template are set in **Settings → Files and links**). Notes in `Templates/` can be inserted with `Alt Shift T`. Templates understand `{{title}}`, `{{date}}`, `{{date:dddd D MMMM}}`, `{{time}}`, `{{yesterday}}`, `{{tomorrow}}` and `{{cursor}}`.
-- **Outline and backlinks** panels sit beside notes, tags and search in the sidebar.
-- **Edit in preview:** in Read mode, click any paragraph, list, table or diagram to edit its markdown right there (the pencil beside the view switch turns this on and off). Click below the last block to add a new one.
-- **Slash menu:** type `/` at the start of a line for headings, checklists, tables, callouts, code, math, diagrams, embeds, templates and more.
-- **Tables:** inside a table, `Tab` and `Shift Tab` move between cells and line the columns up. `Enter` at the end of a row adds a row, and `Ctrl Shift L` tidies the whole table.
-- **Embedded notes:** a line with just `![[Other note]]` shows that note inside this one, and `![[Other note#Heading]]` shows only that section.
-- **Find and replace:** `Ctrl F` finds in the open note (in writing or reading mode), `Ctrl H` also replaces. Match case, whole words and regular expressions (with `$1` in the replacement) are buttons in the bar. Replace all is a single step to undo.
-- **Hover previews:** rest the mouse on a `[[link]]` to read that note without leaving this one. Turn it off in **Settings → Editor → Preview**.
-- **Side by side:** right-click a note and choose **Open to the side** (or `Ctrl Alt O`, or `Alt Enter` in the quick switcher) to read a second note next to the one you're writing. Drag the divider to resize it; links inside it open in the same pane, `Ctrl` click opens them in the editor. Not on phones.
-- **Starred notes:** star the notes you come back to (`Alt S`, or right-click a note) and they're listed in the ★ panel of the sidebar.
-- **On a phone:** swipe in from the left edge for the sidebar, press and hold a note for its menu. On iPhone the formatting bar stays just above the keyboard.
-- **Keyboard:** in the note list, arrow keys move and open folders, `Enter` opens, `F2` renames, `Delete` deletes and `Shift F10` opens the menu. Menus and dialogs give focus back when they close.
-- **Properties:** add them from the note menu, the palette or `/properties`. They're saved as standard front matter (Obsidian reads it too) and shown as a small panel above the note. Notes without properties don't show the panel at all.
+</details>
 
-## Search
+<details>
+<summary><b>Search</b></summary>
 
-Search is full-text (SQLite FTS5, built into Python), and partial words match: `oat` finds "oats" and "oatmeal". It also understands:
+Full-text search (SQLite FTS5, built into Python) where partial words match: `gard` finds "garden" and "gardening".
 
 | Write | Finds |
-| --- | --- |
-| `tag:work` | notes tagged #work (and #work/…) |
-| `path:Daily` | notes whose path contains "Daily" |
-| `title:plan` | notes whose name contains "plan" |
-| `"exact words"` | that exact phrase |
-| `-word`, `-tag:draft` | leaves those out |
+| :--- | :--- |
+| `tomato basil` | Notes with both words |
+| `"cherry tomatoes"` | That exact phrase |
+| `tag:project` | Notes tagged #project (and #project/anything) |
+| `path:Daily` | Notes whose folder or name contains "Daily" |
+| `title:plan` | Notes whose name contains "plan" |
+| `-word`, `-tag:draft` | Leaves those out |
 
-## Import, export and clean-up
+</details>
 
-- **Export** (note menu): **PDF** through your browser's print dialog, with optional header, footer, page numbers, paper size, margins, font, title, properties and tags; a self-contained **HTML** file with its images built in; or the **markdown** itself.
-- **Import** (Settings → Files and links): `.md`/`.txt` notes, images, or a `.zip` of a folder or an Obsidian vault. Folders are kept, hidden folders like `.obsidian` are skipped, and nothing already there is overwritten.
-- **Unused attachments** (Settings → Files and links): finds images and files no note uses any more and moves the ones you pick to the trash.
-
-## Sync, offline and conflicts
-
-Choose how notes sync in **Settings → Sync**:
+<details>
+<summary><b>Sync, offline and conflicts</b></summary>
 
 | Mode | What happens |
-| --- | --- |
+| :--- | :--- |
 | **Live** (default) | Saves as you type; changes from other devices appear immediately |
 | **Interval** | Saves as you type; checks other devices on a timer |
-| **Manual** | Edits stay on this device until you press Sync (`Ctrl S` or the status bar) |
+| **Manual** | Edits stay on this device until you press Sync (`Ctrl S`) |
 
-Every note you open is also kept in the browser (optionally all of them). When the connection drops you can keep reading, editing, and even creating notes. The queue is sent when the server is back: right away in Live and Interval, or when you sync in Manual. If a note changed elsewhere in the meantime, the status bar shows **Conflict**; click it to keep your version, theirs, or both.
+Every note you open is also kept in the browser (optionally all of them), so you can keep reading, editing and creating notes when the connection drops. Edits are sent when the server is back. If a note changed elsewhere in the meantime, the status bar shows **Conflict**: keep your version, theirs, or both.
 
-The app itself is installable and opens offline too, but browsers only allow that over HTTPS or on `localhost`.
+</details>
 
-## History, git, trash and backups
+<details>
+<summary><b>History, trash, archive and backups</b></summary>
 
-- **Version history:** earlier versions of notes are kept as you edit (at most every 10 minutes by default). Browse and restore them with `Alt H` or a note's right-click menu. Switch to **Changes** to see what's different since a version, or what that version changed, with the edited words marked.
-- **Git (optional):** turn it on in **Settings → Sync** to commit the vault on a schedule, and optionally push to a remote. Use an SSH key on the server for pushing. Off by default.
-- **Trash:** deleted notes go to `.trash`. Restore them from **Settings → Sync**. The trash empties itself after 30 days by default.
-- **Backups:** **Settings → Sync → Download .zip** gives you the account's notes. Tokens are left out.
-- **Scheduled backups (optional):** turn them on in **Settings → Sync → Backup**: hourly, daily or weekly at a time you pick, keeping the last 3 to 90. The zips are written on the server to `POLARBOARD_BACKUPS` (by default `data/backups/<account>/`), and can be downloaded or deleted from the same page. If the server was off at the scheduled time, the backup runs as soon as it's back. Mount a NAS folder there (see `compose.yaml`) so a backup survives the server's own disk failing.
+- **Version history** (`Alt H`): earlier versions are kept as you edit. **Changes** shows what's different, with the edited words marked, and any version can be restored.
+- **Trash:** the bin in the left rail lists deleted notes; read one, restore it, or delete it for good. It empties itself after 30 days by default.
+- **Archive:** right-click → **Archive** puts a note or folder away without deleting it. It leaves the note list, search and links, keeps its tags and history, and opens read-only from the box in the left rail until you unarchive it.
+- **Backups:** a `.zip` download at any time, scheduled backups on the server, and optional git commits pushed to a remote.
 
-## Sharing
+</details>
 
-Right-click a note and choose **Share link** to get a read-only link (optionally expiring). Visitors see only that note and its images. The link works wherever your server is reachable.
+<details>
+<summary><b>Sharing, export and import</b></summary>
 
-## Shortcuts
+- **Share links:** right-click a note → **Share link** for a read-only page, optionally expiring. Visitors see only that note and its images.
+- **Export** a note as a PDF (with header, footer, page numbers, paper size and margins), a self-contained HTML file, or Markdown.
+- **Import** `.md` and `.txt` files, images, or a `.zip` of a folder or an Obsidian vault. Nothing already there is overwritten.
+- **Unused attachments:** find images no note uses any more and move the ones you pick to the trash.
 
-| Keys | Action |
-| --- | --- |
-| `Ctrl O` | Open a note (quick switcher) |
-| `Ctrl Shift P` | Command palette |
+</details>
+
+<details>
+<summary><b>Look and feel, phones and keyboard</b></summary>
+
+- Light, dark or automatic; an accent color of your choice; a little film grain if you like it.
+- **On a phone:** swipe in from the left edge for the sidebar, and press and hold a note for its menu. The app installs to the home screen and opens offline (over HTTPS).
+- **Keyboard first:** every command has a shortcut you can change in **Settings → Hotkeys**, and the sidebar works with the arrow keys, `Enter`, `F2`, `Delete` and `Shift F10`.
+
+| Keys | Does |
+| :--- | :--- |
+| `Ctrl O` | Open a note by name |
 | `Ctrl P` | Search inside notes |
+| `Ctrl Shift P` | Command palette |
 | `Ctrl E` | Switch between writing and reading |
 | `Ctrl \` | Show or hide the sidebar |
-| `Ctrl Shift F` | Focus mode |
 | `Alt N` / `Alt D` | New note / today's note |
 | `Alt T` / `Alt W` | New tab / close tab |
-| `Alt H` | Version history |
-| `Ctrl S` | Save and sync now |
-| `Ctrl F` / `Ctrl H` | Find / find and replace (`F3`, `Shift F3` next and previous) |
-| `Alt S` | Star or unstar the note |
-| `Ctrl Alt O` | Open a note to the side |
-| `F8` | Next writing suggestion |
+| `Alt S` / `Alt H` | Star the note / version history |
+| `Ctrl F` / `Ctrl H` | Find / find and replace |
 | `Ctrl B` / `Ctrl I` / `Ctrl K` | Bold / italic / link |
-| `Ctrl Shift L` | Tidy the table under the cursor |
+| `Ctrl S` | Save and sync now |
+| `Ctrl Shift F` | Focus mode |
+| `F8` | Next writing suggestion |
 
-Every shortcut can be changed in **Settings → Hotkeys**. Firefox keeps `Ctrl Shift P` for itself, so rebind the palette there if you use Firefox.
+Firefox keeps `Ctrl Shift P` for itself; give the palette another key in **Settings → Hotkeys**.
 
-## Project layout
+</details>
+
+<p align="center"><img src="docs/screenshot-light.png" alt="Polarboard in light mode, editing the Garden planner note side by side with its preview" width="900"></p>
+
+## API and automation
+
+Create a token in **Settings → Keychain**. Tokens belong to one account and can read and write its notes, but can't change the account, its tokens or its shares. Scripts can also sign in with `curl -u <account>:<password>`.
+
+```sh
+# list every note
+curl -H "Authorization: Bearer pb_…" https://notes.example.com/api/tree
+
+# append a line to Inbox.md (created if needed)
+curl -X POST -H "Authorization: Bearer pb_…" \
+  -d '{"path": "Inbox", "text": "- remember this"}' https://notes.example.com/api/append
+```
+
+Without a token, write requests need the header `X-Polarboard: 1`.
+
+## Development
+
+There's no build step: edit a file and reload the page. The end-to-end tests start a real server on a throwaway folder and drive the app in Chromium:
+
+```sh
+pip install playwright && playwright install chromium    # once
+python3 tests/run.py                  # everything, about three minutes
+python3 tests/run.py spell bins       # just tests/test_spell.py and tests/test_bins.py
+```
 
 ```
-server.py              stdlib-only HTTP server + JSON API
-static/index.html      page shell          static/share.html   shared-note page
-static/app.css         look and feel       static/sw.js        offline app shell
-static/app.js          loads static/app/  static/offline.js   offline note cache
-static/app/*.js        the app, one module per area (tree, tabs, writing, find, side, …)
-static/diff.js         line and word differences for version history
-static/settings.js     settings window     static/spell.js     Harper integration
-static/editor.js       editor commands     static/rich.js      code, math, diagrams
-static/props.js        properties panel    static/export.js    PDF and HTML export
-static/print.css       printed and exported pages
-static/markdown.js     markdown renderer (escapes all raw HTML)
-static/vendor/         bundled open-source libraries (see THIRD_PARTY_NOTICES.md)
+server.py              the whole server: HTTP, JSON API, search, history, backups
+examples/              the notes a fresh install starts with
+static/index.html      the app's page             static/share.html   a shared note's page
+static/app.js          loads static/app/          static/app/*.js     the app, one module per area
+static/markdown.js     Markdown renderer (escapes all raw HTML)
+static/editor.js       editor commands            static/props.js     properties panel
+static/spell.js        Harper integration         static/rich.js      code, math, diagrams
+static/settings.js     settings window            static/export.js    PDF and HTML export
+static/app.css         look and feel              static/print.css    printed and exported pages
+static/sw.js           offline app shell          static/offline.js   offline note cache
+static/vendor/         bundled libraries (see THIRD_PARTY_NOTICES.md)
+tests/                 end-to-end tests (see tests/README.md)
 ```
+
+## Credits
+
+Polarboard bundles [Harper](https://github.com/Automattic/harper), [highlight.js](https://highlightjs.org), [KaTeX](https://katex.org) and [Mermaid](https://mermaid.js.org). Their licenses are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

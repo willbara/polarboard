@@ -7,12 +7,15 @@ import { setMode } from './layout.js';
 import { menu, toast } from './ui.js';
 import { edit } from './commands.js';
 import { block } from './writing.js';
+import { setSetting } from './prefs.js';
 
 // ------------------------------------------------------------------ writing checks (Harper)
 export const spell = new Spell();
 export const lint = { items: [], timer: 0, ready: false, error: '' };
 export let prevText = '';
 export const spellOn = () => state.settings.spellEngine === 'harper';
+/** A note can turn its own checks off with the property spellcheck: false (say, one written in another language). */
+export const checksOff = () => /^spellcheck:\s*["']?(false|no|off)["']?\s*$/mi.test(state.cur?.front || '');
 
 export async function startSpell() {
   const st = $('#stLint');
@@ -20,9 +23,7 @@ export async function startSpell() {
   st.hidden = false;
   setLintStatus(spell.ready ? 'checking' : 'loading');
   try {
-    const words = await loadWords();
-    const s = state.settings;
-    await spell.configure({ dialect: s.dialect, rules: s.harperRules, words });
+    await configureSpell();
     lint.ready = true;
     lint.error = '';
     scheduleLint(0);
@@ -32,17 +33,35 @@ export async function startSpell() {
   }
 }
 
-export async function loadWords() {
+/** The account's dictionary and ignored suggestions (from the server, or the last copy kept here). */
+export async function loadDictionary() {
+  await sendIgnored();
   try {
     const r = await api('GET', '/api/dictionary');
     vstore.set('words', r.words);
-    return r.words;
-  } catch { return vstore.get('words', []); }
+    vstore.set('ignored', [...new Set([...(r.ignored || []), ...vstore.get('ignoredUnsent', [])])]);
+    return { words: r.words, ignored: vstore.get('ignored', []) };
+  } catch { return { words: vstore.get('words', []), ignored: vstore.get('ignored', []) }; }
+}
+
+/** Ignores made on this device that the server hasn't got yet (say, made offline). The server merges them in. */
+async function sendIgnored() {
+  const unsent = vstore.get('ignoredUnsent', []);
+  if (!unsent.length) return;
+  try { await api('PUT', '/api/dictionary', { ignore: unsent }); vstore.set('ignoredUnsent', []); } catch { /* next time */ }
+}
+
+/** Give Harper the current settings, dictionary and ignored suggestions. */
+export async function configureSpell() {
+  const { words, ignored } = await loadDictionary();
+  const s = state.settings;
+  await spell.configure({ dialect: s.dialect, rules: s.harperRules, words, ignored, isolate: s.spellIsolate });
 }
 
 export function scheduleLint(ms = 450) {
   clearTimeout(lint.timer);
   if (!spellOn() || !state.cur || !lint.ready) return;
+  if (checksOff()) { clearLints(); setLintStatus('off'); return; }
   lint.timer = setTimeout(runLint, ms);
 }
 
@@ -112,7 +131,7 @@ export function blockLints(ta, layer) {
     render() { paintLints(layer, ta.value, t.items); },
     recheck(ms = 450) {
       clearTimeout(t.timer);
-      if (!spellOn() || !lint.ready) return;
+      if (!spellOn() || !lint.ready || checksOff()) return;
       t.timer = setTimeout(async () => {
         const text = ta.value;
         let items;
@@ -155,10 +174,12 @@ export function setLintStatus(mode) {
   const label = mode === 'loading' ? 'Loading writing checks…'
     : mode === 'checking' && !n ? 'Checking…'
     : mode === 'error' ? 'Checks unavailable'
+    : mode === 'off' ? 'Checks off for this note'
     : n ? `${n} suggestion${n === 1 ? '' : 's'}` : 'No issues';
   b.querySelector('span').textContent = label;
-  b.dataset.state = mode === 'error' ? 'error' : n ? 'issues' : mode === 'loading' ? 'loading' : 'clean';
-  b.title = mode === 'error' ? `Harper could not start: ${lint.error}` : 'Writing checks by Harper. Click to list them.';
+  b.dataset.state = mode === 'error' ? 'error' : n ? 'issues' : mode === 'loading' || mode === 'off' ? 'loading' : 'clean';
+  b.title = mode === 'error' ? `Harper could not start: ${lint.error}`
+    : mode === 'off' ? 'This note has spellcheck: false in its properties.' : 'Writing checks by Harper. Click to list them.';
 }
 
 export function applySuggestion(l, s, t = mainLints) {
@@ -187,6 +208,23 @@ export async function addWord(word) {
   toast(`Added “${word}” to the dictionary`);
 }
 
+/** Ignore one issue on every device: Harper keeps a hash of the word and its surroundings, never the text. */
+export async function ignoreLint(l, t = mainLints) {
+  const hash = await spell.ignore(t.ta.value, l);
+  t.items = t.items.filter((x) => x !== l);
+  t.render();
+  if (!hash) return;
+  vstore.set('ignored', [...new Set([...vstore.get('ignored', []), hash])]);
+  vstore.set('ignoredUnsent', [...new Set([...vstore.get('ignoredUnsent', []), hash])]);
+  await sendIgnored();
+}
+
+/** Turn one of Harper's rules off everywhere (Settings → Editor → Individual rules turns it back on). */
+export function turnOffRule(rule) {
+  setSetting(`harperRules.${rule}`, false);
+  toast(`Turned off “${Spell.ruleLabel(rule)}”. Settings → Editor → Individual rules turns it back on.`);
+}
+
 export function lintMenu(l, anchor, t = mainLints) {
   const sugs = l.suggestions.map((s) => ({
     icon: 'check',
@@ -198,7 +236,8 @@ export function lintMenu(l, anchor, t = mainLints) {
     ...sugs,
     ...(sugs.length ? ['-'] : []),
     ...(l.group === 'spelling' ? [{ icon: 'plus', label: `Add “${l.problem}” to dictionary`, run: () => addWord(l.problem) }] : []),
-    { icon: 'x', label: 'Ignore', run: async () => { await spell.ignore(t.ta.value, l); t.items = t.items.filter((x) => x !== l); t.render(); } },
+    { icon: 'x', label: 'Ignore here', run: () => ignoreLint(l, t) },
+    ...(l.group !== 'spelling' && l.rule ? [{ icon: 'blank', label: `Turn off “${Spell.ruleLabel(l.rule)}”`, run: () => turnOffRule(l.rule) }] : []),
   ]);
 }
 

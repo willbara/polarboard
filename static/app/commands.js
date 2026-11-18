@@ -16,6 +16,7 @@ import { addProperties, block } from './writing.js';
 import { toggleStar } from './tree.js';
 import { find, findStep, openFind } from './find.js';
 import { closeSide, swapSide } from './side.js';
+import { archiveItem } from './bins.js';
 
 // ------------------------------------------------------------------ hotkeys
 export const CODE_KEYS = {
@@ -115,7 +116,10 @@ export function allCommands() {
     ['Tags for this note', 'tag', () => state.cur && tagsDialog(state.cur.path)],
     ['Duplicate this note', 'copy', () => state.cur && duplicateNote(state.cur.path)],
     ['Move this note', 'move', () => state.cur && moveNoteDialog(state.cur.path)],
+    ['Archive this note', 'archive', () => state.cur && archiveItem(state.cur.path)],
     ['Delete this note', 'trash', () => state.cur && deleteNote(state.cur.path)],
+    ['Show the archive', 'archive', () => showPanel('archive', true)],
+    ['Show the trash', 'trash', () => showPanel('trash', true)],
     ['Copy link to this note', 'link', () => state.cur && copyText(`[[${stem(state.cur.path)}]]`, 'Link copied')],
     ['Show tags', 'hash', () => showPanel('tags', true)],
     ['Import notes', 'download', () => showSettings('files')],

@@ -3,7 +3,7 @@ import { idb } from '../offline.js';
 import { GROUPS } from '../spell.js';
 import { accounts, avatar, chooseAccount, currentAccount, loadAccounts, lockAccount, showLanding, switchAccount } from './accounts.js';
 import { COMMANDS, comboFromEvent, comboLabel, keyFor } from './commands.js';
-import { $, $$, ACCENTS, DEFAULTS, SORTS, VAULT, WIDTHS, api, dirname, el, fmtBytes, fmtDateTime, hooks, isMac, mergeSettings, relTime, state, stem, store } from './core.js';
+import { $, $$, ACCENTS, DEFAULTS, FORMATS, SORTS, VAULT, WIDTHS, api, dirname, el, fmtBytes, fmtDateTime, hooks, isMac, mergeSettings, relTime, state, stem, store } from './core.js';
 import { formatDate, templateNotes } from './daily.js';
 import { setFocus, setMode } from './layout.js';
 import { importFiles, openHistory, saveFile } from './notes.js';
@@ -20,7 +20,7 @@ import { restoreSide } from './side.js';
 // ------------------------------------------------------------------ settings window
 export function showSettings(category) {
   openSettings({
-    state, DEFAULTS, ACCENTS, WIDTHS, SORTS, COMMANDS,
+    state, DEFAULTS, ACCENTS, FORMATS, WIDTHS, SORTS, COMMANDS,
     setSetting, setConfig, configSaved: () => cfgSaved, applySettings, api, toast, dialog, closeLayer, pending,
     keyFor, comboLabel, comboFromEvent, fmtBytes, fmtDateTime, relTime, saveFile,
     refreshTree, flushPending, openHistory: (p) => openHistory(p),

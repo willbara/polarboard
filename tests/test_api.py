@@ -43,6 +43,12 @@ def run(t):
     notes = {n["path"]: n for n in tree["notes"]}
     t.ok("Project-X" in notes["Work/Roadmap.md"]["tags"] and notes["Index.md"]["pinned"] and "mine" in notes["Index.md"]["tags"], "folder tags inherit, notes pin and tag")
     t.ok(tree["folderMeta"]["Work"] == {"tags": ["Project-X"], "sort": "modified", "note": "Work/Roadmap.md"}, "folder sort and folder note saved")
+    api("POST", "/api/meta", {"path": "Work", "set": {"color": "teal"}})
+    api("POST", "/api/meta", {"path": "Index.md", "set": {"color": "chartreuse"}})
+    tree = api("GET", "/api/tree")
+    t.ok(tree["folderMeta"]["Work"]["color"] == "teal" and not next(n for n in tree["notes"] if n["path"] == "Index.md")["color"],
+         "folders and notes take a color from the palette, and nothing else")
+    api("POST", "/api/meta", {"path": "Work", "set": {"color": None}})
     api("POST", "/api/move", {"from": "Work", "to": "Projects"})
     t.ok(api("GET", "/api/tree")["folderMeta"]["Projects"]["note"] == "Projects/Roadmap.md", "folder note follows a folder rename")
 
@@ -87,3 +93,33 @@ def run(t):
     # config cleaning
     c = api("PUT", "/api/config", {"attachmentFolder": "../etc"})
     t.ok(c["attachmentFolder"] == "etc", "attachment folder can't point outside the vault")
+
+    # uploads with the same name never overwrite each other
+    ups = [api("POST", "/api/upload?name=same.png", raw=f"image {i}".encode(), headers={"Content-Type": "image/png"})["path"] for i in range(3)]
+    t.ok(len(set(ups)) == 3 and [(V / u).read_text() for u in ups] == ["image 0", "image 1", "image 2"], "three uploads named alike stay three files")
+
+    # attachments linked as <path with spaces> count as used
+    (V / "etc/my photo.png").write_bytes(b"PNG")
+    api("POST", "/api/note", {"name": "Album", "content": "![](<etc/my photo.png>)"})
+    t.ok(any(f["path"] == "etc/my photo.png" and f["used"] for f in api("GET", "/api/attachments")["files"]), "<angle bracket> image links count as used")
+
+    # share links show the note and its images, never other notes it mentions
+    api("POST", "/api/note", {"name": "Secret", "content": "private"})
+    api("POST", "/api/note", {"name": "Public", "content": f"See [this](Secret.md) and ![]({ups[0]})"})
+    tok = api("POST", "/api/shares", {"path": "Public.md"})["token"]
+    t.ok(s.status("GET", f"/api/public/{tok}/file?path={ups[0]}") == 200, "a shared note's image is served")
+    t.ok(s.status("GET", f"/api/public/{tok}/file?path=Secret.md") == 404, "a note linked from a shared note is not")
+
+    # wrong passwords are limited per account, whatever IP the client claims
+    api("POST", "/api/accounts", {"name": "locked", "password": "correct horse"})
+    unlock = lambda pw, ip: api("POST", "/api/accounts/unlock", {"id": "locked", "password": pw}, headers={"X-Forwarded-For": ip}).get("_status")
+    codes = [unlock("wrong", f"10.0.0.{i}") for i in range(9)]
+    t.ok(codes == [403] * 8 + [429], f"the 9th wrong password waits, even from a new IP ({codes})")
+    basic = __import__("base64").b64encode(b"locked:correct horse").decode()
+    wrong = __import__("base64").b64encode(b"other:nope").decode()
+    api("POST", "/api/accounts", {"name": "other", "password": "right one here"})
+    for _ in range(9):
+        s.status("GET", "/api/tree?vault=other", {"Authorization": f"Basic {wrong}"})
+    t.ok(s.status("GET", "/api/tree?vault=other", {"Authorization": f"Basic {wrong}"}) == 429, "curl -u with a wrong password is limited too")
+    t.ok(api("POST", "/api/accounts/unlock", {"id": "other", "password": "right one here"}).get("_status") is None,
+         "but a script with an old password can't lock browsers out of signing in")

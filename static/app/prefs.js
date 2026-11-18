@@ -1,5 +1,5 @@
-import { icon } from '../icons.js';
-import { $, WIDTHS, api, el, state, store } from './core.js';
+import { FEATHER, icon } from '../icons.js';
+import { $, FORMATS, WIDTHS, api, el, state, store } from './core.js';
 import { setMode } from './layout.js';
 import { schedulePoll } from './shell.js';
 import { runLint, startSpell } from './spellui.js';
@@ -33,6 +33,12 @@ export function applySettings() {
   r.classList.toggle('grain-anim', !!s.grainAnim);
   el.ta.spellcheck = s.spellEngine === 'browser';
   el.editor.classList.toggle('plain', !s.syntaxColors);
+  r.classList.toggle('fmt-plain', !s.fmtColors);
+  for (const [k] of FORMATS) {
+    const c = s.fmtColors && /^#[0-9a-f]{6}$/i.test(s.fmt?.[k] || '') ? s.fmt[k] : '';
+    if (!c) r.style.removeProperty(`--fmt-${k}`);
+    else r.style.setProperty(`--fmt-${k}`, k === 'mark' ? `color-mix(in srgb, ${c} 32%, transparent)` : c); // a highlight is a tint
+  }
   el.main.classList.toggle('no-toolbar', !s.showToolbar);
   el.main.classList.toggle('no-arrows', !s.showArrows);
   el.main.classList.toggle('no-crumbs', !s.showCrumbs);
@@ -60,7 +66,7 @@ export function setSetting(path, value) {
   if (path === 'sort') renderTree();
   if (path === 'mode') setMode(value, false);
   if (path === 'readingWpm') updateCounts();
-  if (/^(spellEngine|dialect|harperRules)/.test(path)) startSpell();
+  if (/^(spellEngine|dialect|harperRules|spellIsolate)/.test(path)) startSpell();
   if (path.startsWith('spellGroups')) runLint();
   if (/^rich/.test(path) || path === 'previewEdit') renderPreview(true);
   if (path === 'previewEdit') $('#editPreviewBtn').classList.toggle('on', !!value);
@@ -84,15 +90,14 @@ export function setConfig(path, value) {
   }, 350);
 }
 
-/** The browser-tab icon is the snowflake in the current accent colour. */
+/** The browser-tab icon is the feather in the current accent colour. */
 export function paintFavicon() {
   const probe = document.createElement('span');
   probe.style.color = 'var(--accent)';
   document.body.appendChild(probe);
   const color = getComputedStyle(probe).color;
   probe.remove();
-  const arm = '<path d="M12 2v20M9.5 3.5 12 6l2.5-2.5M9.5 20.5 12 18l2.5 2.5"/>';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">`
-    + [0, 60, 120].map((d) => `<g transform="rotate(${d} 12 12)">${arm}</g>`).join('') + '</svg>';
+    + FEATHER + '</svg>';
   $('#favicon').href = 'data:image/svg+xml,' + encodeURIComponent(svg);
 }

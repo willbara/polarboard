@@ -29,6 +29,8 @@
         <button class="rail-btn" id="railSwitch" title="Open a note (Ctrl O)" aria-label="Open a note"><i data-icon="search"></i></button>
         <button class="rail-btn" id="railDaily" title="Today's note (Alt D)" aria-label="Today's note"><i data-icon="calendar"></i></button>
         <button class="rail-btn" id="railPalette" title="Commands (Ctrl Shift P)" aria-label="Commands"><i data-icon="command"></i></button>
+        <button class="rail-btn" id="railArchive" data-panel="archive" title="Archive" aria-label="Archive"><i data-icon="archive"></i></button>
+        <button class="rail-btn" id="railTrash" data-panel="trash" title="Trash" aria-label="Trash"><i data-icon="trash"></i></button>
         <span class="grow"></span>
         <button class="vault-btn" id="vaultBtn" title="Account" aria-label="Account"></button>
         <button class="rail-btn" id="themeBtn" title="Light / dark" aria-label="Toggle theme"><i data-icon="moon"></i></button>
@@ -84,6 +86,16 @@
         <section class="panel" data-panel="links" hidden>
           <header class="panel-tools"><span class="panel-title">Backlinks</span></header>
           <div class="list scroll" id="backlinks"></div>
+        </section>
+
+        <section class="panel" data-panel="archive" hidden>
+          <header class="panel-tools"><span class="panel-title">Archive</span></header>
+          <div class="list scroll" id="archiveList"></div>
+        </section>
+
+        <section class="panel" data-panel="trash" hidden>
+          <header class="panel-tools"><span class="panel-title">Trash</span><span class="grow"></span><button class="btn sm ghost" id="emptyTrashBtn" hidden>Empty</button></header>
+          <div class="list scroll" id="trashList"></div>
         </section>
       </aside>
     </div>
