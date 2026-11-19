@@ -354,7 +354,7 @@ const PAGES = {
         + row('Typewriter scrolling', 'Keep the line you are writing near the middle of the page.', toggle(s, 'typewriter'))
         + row('Tab key indents with', '', seg(s, 'indent', [['tab', 'Tab'], ['2', '2 spaces'], ['4', '4 spaces']])))
       + group('Preview',
-        row('Edit in preview', 'In Read mode, click a paragraph, list or table to edit its markdown right there. The pencil button beside the view switch turns this on and off.', toggle(s, 'previewEdit'))
+        row('Edit in preview', 'In Read mode, click a paragraph, list or table to edit its markdown right there. It is on unless you turn it off here.', toggle(s, 'previewEdit'))
         + row('Highlight code', 'Colors code blocks that name their language, like ```js.', toggle(s, 'richCode'))
         + row('Math', 'Renders $inline$ and $$block$$ math with KaTeX.', toggle(s, 'richMath'))
         + row('Diagrams', 'Renders ```mermaid blocks as diagrams.', toggle(s, 'richDiagrams'))

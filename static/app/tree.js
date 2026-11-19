@@ -347,8 +347,10 @@ export function noteMenu(path, anchor) {
   const folder = dirname(path);
   const isFolderNote = folder && folderMeta(folder).note === path;
   menu(anchor, [
-    { icon: 'plus', label: 'Open in new tab', run: () => openNote(path, { newTab: true }) },
-    ...(mobile.matches ? [] : [{ icon: 'columns', label: 'Open to the side', run: () => openSide(path) }]),
+    ...(mobile.matches ? [] : [ // phones have no tabs and no side pane
+      { icon: 'plus', label: 'Open in new tab', run: () => openNote(path, { newTab: true }) },
+      { icon: 'columns', label: 'Open to the side', run: () => openSide(path) },
+    ]),
     '-',
     { icon: 'edit', label: 'Rename', run: () => renameNote(path) },
     { icon: 'move', label: 'Move to…', run: () => moveNoteDialog(path) },

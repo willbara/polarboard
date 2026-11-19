@@ -12,7 +12,7 @@ import { nextIssue } from './spellui.js';
 import { save, syncNow } from './sync.js';
 import { closeTab, newTab, switchTab } from './tabs.js';
 import { commandPalette, quickSwitcher } from './ui.js';
-import { addProperties, block } from './writing.js';
+import { addProperties, block, togglePreviewEdit } from './writing.js';
 import { toggleStar } from './tree.js';
 import { find, findStep, openFind } from './find.js';
 import { closeSide, swapSide } from './side.js';
@@ -89,7 +89,7 @@ export const COMMANDS = [
   { id: 'export', group: 'General', label: 'Export this note (PDF, HTML, Markdown)', def: '', icon: 'download', run: () => exportDialog() },
   { id: 'properties', group: 'Editor', label: 'Add properties', def: '', icon: 'outline', run: () => addProperties() },
   { id: 'formatTable', group: 'Editor', label: 'Tidy the table', def: 'Mod+Shift+L', scope: 'editor', icon: 'layout', run: edit(commands.formatTable) },
-  { id: 'previewEdit', group: 'General', label: 'Edit in preview on or off', def: '', icon: 'edit', run: () => $('#editPreviewBtn').click() },
+  { id: 'previewEdit', group: 'General', label: 'Edit in preview on or off', def: '', icon: 'edit', run: () => togglePreviewEdit() },
   { id: 'nextIssue', group: 'Editor', label: 'Next writing suggestion', def: 'F8', scope: 'editor', icon: 'check', run: () => nextIssue() },
   { id: 'settings', group: 'General', label: 'Open settings', def: 'Mod+,', run: () => showSettings() },
   { id: 'bold', group: 'Editor', label: 'Bold', def: 'Mod+B', scope: 'editor', run: edit(commands.bold) },

@@ -384,8 +384,8 @@ el.previewPane.addEventListener('click', (e) => {
   startBlockEdit(null, true); // clicking below the last block starts a new one
 });
 
-$('#editPreviewBtn').addEventListener('click', () => {
+export function togglePreviewEdit() {
   const on = !state.settings.previewEdit;
   setSetting('previewEdit', on);
   toast(on ? 'Click any paragraph, list or table to edit it' : 'Editing in the preview is off');
-});
+}

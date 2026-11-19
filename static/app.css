@@ -395,9 +395,9 @@ kbd {
 .main {
   grid-area: main; min-width: 0; min-height: 0; overflow: hidden; background: var(--surface);
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
   grid-template-rows: 44px minmax(0, 1fr) auto;
-  grid-template-areas: "arrows crumbs tools editp mode focus more" "work work work work work work work" "status status status status status status status";
+  grid-template-areas: "arrows crumbs tools mode focus more" "work work work work work work" "status status status status status status";
   align-items: center; column-gap: 6px;
 }
 .navrow { display: contents; }
@@ -406,9 +406,6 @@ kbd {
 .toolbar { grid-area: tools; }
 .seg { grid-area: mode; }
 #focusBtn { grid-area: focus; }
-#editPreviewBtn { grid-area: editp; }
-.main:not(.reading) #editPreviewBtn, .main.no-note #editPreviewBtn { display: none; }
-#editPreviewBtn.on { color: var(--accent); background: var(--accent-soft); }
 #noteMenuBtn { grid-area: more; margin-right: 8px; }
 .workspace { grid-area: work; align-self: stretch; }
 .statusbar { grid-area: status; }
@@ -1161,13 +1158,17 @@ html.offline .vault-btn { box-shadow: 0 0 0 1.5px var(--warn); }
 
 /* ---------- mobile ---------- */
 @media (max-width: 760px) {
+  /* No tab strip on a phone: the note's own bar is the only bar, with the sidebar button tucked into its left end. */
   .app, .app.sb-collapsed {
-    grid-template-columns: var(--bar-h) minmax(0, 1fr);
-    grid-template-rows: calc(var(--bar-h) + env(safe-area-inset-top)) minmax(0, 1fr);
-    grid-template-areas: "corner tabbar" "main main";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "main";
   }
-  .corner, .tabbar { padding-top: env(safe-area-inset-top); }
-  .corner { border-right: 0; background: var(--chrome); }
+  .tabbar { display: none; }
+  .corner {
+    position: absolute; z-index: 5; top: env(safe-area-inset-top); left: env(safe-area-inset-left);
+    width: var(--bar-h); height: 44px; background: none; border: 0; box-shadow: none;
+  }
   .app.sb-collapsed .side-head, .app.sb-collapsed .sidebar { display: flex; }
 
   .side {
@@ -1187,16 +1188,21 @@ html.offline .vault-btn { box-shadow: 0 0 0 1.5px var(--warn); }
   .scrim { display: block; position: fixed; inset: 0; z-index: 39; background: hsl(0 0% 0% / .45); opacity: 0; pointer-events: none; transition: opacity .3s; }
   .app.drawer-open .scrim { opacity: 1; pointer-events: auto; }
 
-  .tab { min-width: 84px; flex-basis: 150px; }
-  .tab .close { opacity: 1; }
-
   .main {
-    grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-    grid-template-rows: 42px minmax(0, 1fr) auto auto;
-    grid-template-areas: "crumbs editp mode focus more" "work work work work work" "tools tools tools tools tools" "status status status status status";
+    padding-top: env(safe-area-inset-top);
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    grid-template-rows: 44px minmax(0, 1fr) auto auto;
+    grid-template-areas: "crumbs mode focus more" "work work work work" "tools tools tools tools" "status status status status";
   }
   .nav-arrows { display: none; }
-  .crumbs { padding-left: 10px; }
+  .crumbs { padding-left: calc(var(--bar-h) + 2px); }
+  /* The big title already names the note, so the bar shows only its folders,
+     until the title scrolls away: then the name slides into the bar. */
+  .main:not(.title-gone) .crumbs .here, .main:not(.title-gone) .crumbs .sep:nth-last-child(2) { display: none; }
+  .main.title-gone .crumbs .here { color: var(--text); font-weight: 600; animation: rise .22s var(--ease); }
+  .workspace { border-top: 1px solid transparent; transition: border-color .2s; }
+  .main.title-gone .workspace { border-top-color: var(--line); }
+  #stWidth { display: none; }
   .seg button[data-mode="split"] { display: none; }
   .toolbar { padding: 4px 8px; overflow-x: auto; scrollbar-width: none; border-top: 1px solid var(--line); justify-content: space-between; background: var(--chrome); }
   .toolbar::-webkit-scrollbar { display: none; }
@@ -1207,7 +1213,7 @@ html.offline .vault-btn { box-shadow: 0 0 0 1.5px var(--warn); }
   .hide-sm { display: none !important; }
   .sheet { padding: 20px 20px 40vh; }
   .title-input, .title-view { font-size: calc(var(--editor-size) * 1.6); }
-  .app.focus, .app.focus.sb-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-areas: "tabbar" "main"; }
+  .app.focus, .app.focus.sb-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); grid-template-areas: "main"; }
   .app.focus .side { display: none; }
   .app.focus.reveal-bottom .toolbar { opacity: 1; }
   .toasts { bottom: 96px; }

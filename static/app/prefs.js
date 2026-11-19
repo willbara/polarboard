@@ -69,7 +69,6 @@ export function setSetting(path, value) {
   if (/^(spellEngine|dialect|harperRules|spellIsolate)/.test(path)) startSpell();
   if (path.startsWith('spellGroups')) runLint();
   if (/^rich/.test(path) || path === 'previewEdit') renderPreview(true);
-  if (path === 'previewEdit') $('#editPreviewBtn').classList.toggle('on', !!value);
   if (path === 'syncMode') { schedulePoll(true); if (!manual()) flushPending(); else if (state.cur?.dirty) saveLocal(); }
   if (path === 'offlineAll' && value) prefetchNotes(true);
 }

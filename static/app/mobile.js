@@ -23,6 +23,19 @@ vv?.addEventListener('resize', fitViewport);
 vv?.addEventListener('scroll', fitViewport);
 fitViewport();
 
+/**
+ * Phones hide the tab strip and drop the note's name from the breadcrumbs while its
+ * title is on screen. Mark when neither title (writing or reading) is visible, so the
+ * name can come back to the bar.
+ */
+const seenTitles = new Set();
+const titleWatch = new IntersectionObserver((entries) => {
+  for (const e of entries) e.isIntersecting ? seenTitles.add(e.target) : seenTitles.delete(e.target);
+  el.main.classList.toggle('title-gone', !seenTitles.size);
+});
+titleWatch.observe(el.title);
+titleWatch.observe(el.titleView);
+
 /** Swipe in from the left edge to open the sidebar, swipe it back to close it. */
 let swipe = null;
 document.addEventListener('touchstart', (e) => {

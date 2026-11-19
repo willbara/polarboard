@@ -27,7 +27,7 @@ Type `/` at the start of a line for a menu of things to insert: headings, checkl
 
 ## Edit in place
 
-In **Read** mode, click any paragraph, list, or table to edit its Markdown right there. Click below the last block to add a new one. The pencil beside the view switch turns this on and off.
+In **Read** mode, click any paragraph, list, or table to edit its Markdown right there. Click below the last block to add a new one. You can turn this off in Settings.
 
 ## Find and replace
 

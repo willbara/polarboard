@@ -28,7 +28,7 @@ $('#focusBtn').addEventListener('click', () => setFocus(!el.app.classList.contai
 export let revealTimer = 0;
 export function revealFor(x, y, touch) {
   if (!el.app.classList.contains('focus') || !state.settings.focusReveal) return;
-  const topEdge = el.main.getBoundingClientRect().top + 44 + 10;
+  const topEdge = el.main.getBoundingClientRect().top + parseFloat(getComputedStyle(el.main).paddingTop) + 44 + 10;
   const bottoms = [$('.statusbar')];
   if (mobile.matches) bottoms.push($('#toolbar'));
   const bottomEdge = Math.min(...bottoms.map((n) => n.getBoundingClientRect().top)) - 10;
@@ -121,7 +121,6 @@ export function setMode(mode, remember = true) {
   el.ws.dataset.mode = mode;
   el.main.classList.toggle('reading', mode === 'read');
   $$('#modeSeg button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
-  $('#editPreviewBtn').classList.toggle('on', !!state.settings.previewEdit);
   if (remember) { state.settings.mode = mode; store.set('settings', state.settings); }
   renderPreview(true);
   if (find.open) refreshFind();
